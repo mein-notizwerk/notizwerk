@@ -59,7 +59,7 @@ const Sync = (() => {
   }
   const authCall = (path, body) => call('/auth/v1/' + path, { method: 'POST', body, auth: false });
   function setSession(j) {
-    meta.session = { access: j.access_token, refresh: j.refresh_token, exp: j.expires_at ? j.expires_at * 1000 : Date.now() + (j.expires_in || 3600) * 1000, email: j.user?.email || meta.session?.email || '' };
+    meta.session = { access: j.access_token, refresh: j.refresh_token, exp: j.expires_at ? j.expires_at * 1000 : Date.now() + (j.expires_in || 3600) * 1000, email: j.user?.email || meta.session?.email || '', id: j.user?.id || meta.session?.id || '' };
   }
   async function ensureToken() {
     if (!loggedIn()) throw new AuthError('nicht angemeldet');
@@ -342,6 +342,20 @@ const Sync = (() => {
     call('/rest/v1/rpc/nw_keepalive', { method: 'POST', body: {}, auth: false }).then(() => localStorage.setItem('nw:keepalive', day)).catch(() => { });
   }
 
+  // Dateianhänge und Tonaufnahmen liegen im privaten Speicher "nw-files", im Ordner des eigenen Kontos.
+  // file(id, blob) lädt hoch, file(id) lädt herunter. null = nicht angemeldet bzw. Datei nicht vorhanden.
+  async function file(id, blob) {
+    if (!configured() || !loggedIn()) return null;
+    await ensureToken();
+    let user = meta.session.id;
+    if (!user) try { user = JSON.parse(atob(meta.session.access.split('.')[1].replace(/-/g, '+').replace(/_/g, '/'))).sub; } catch { return null; }
+    const c = conf(), headers = { apikey: c.key, Authorization: 'Bearer ' + meta.session.access };
+    if (blob) Object.assign(headers, { 'Content-Type': blob.type || 'application/octet-stream', 'x-upsert': 'true' });
+    const r = await fetch(`${c.url}/storage/v1/object/nw-files/${user}/${id}`, { method: blob ? 'POST' : 'GET', headers, body: blob || undefined });
+    if (!r.ok) { if (!blob && (r.status === 404 || r.status === 400)) return null; throw new Error('Speicher: HTTP ' + r.status); }
+    return blob ? true : await r.blob();
+  }
+
   async function start() {
     const m = await DB.get('sync'); if (m) meta = Object.assign(meta, m);
     setStatus(!configured() ? 'off' : loggedIn() ? 'busy' : 'login');
@@ -351,5 +365,5 @@ const Sync = (() => {
     addEventListener('online', () => sync());
     addEventListener('offline', () => setStatus('offline'));
   }
-  return { start, sync, changed, dialog, get status() { return status; } };
+  return { start, sync, changed, dialog, file, get status() { return status; } };
 })();

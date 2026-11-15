@@ -167,7 +167,33 @@ async function ocrPage() {
   note.done();
 }
 
-// ---------- Dateianhänge und Tonaufnahmen (liegen nur auf diesem Gerät) ----------
+// ---------- Dateianhänge und Tonaufnahmen ----------
+// Die Datei liegt lokal in IndexedDB (att:<id>) und wird zusätzlich in den Cloud-Speicher hochgeladen.
+// Andere Geräte laden sie beim ersten Öffnen herunter.
+const Files = {
+  MAX: 50e6, busy: false,
+  async queue(id, size) {
+    if (size > this.MAX) return toast('Größer als 50 MB – diese Datei bleibt nur auf diesem Gerät.');
+    await DB.set('att-pending', [...((await DB.get('att-pending')) || []), id]); this.run();
+  },
+  async run() { // lädt alles hoch, was noch aussteht; bricht ab, wenn nicht angemeldet oder offline
+    if (this.busy || !navigator.onLine || typeof Sync === 'undefined') return; this.busy = true;
+    try {
+      if (!await DB.get('att-migrated')) { // einmalig: Anhänge aus der Zeit vor der Synchronisation nachreichen
+        const ids = new Set(); for (const { page } of allPages()) for (const b of page.blocks) for (const m of b.html.matchAll(/data-att="([a-z0-9]+)"/gi)) ids.add(m[1]);
+        const have = []; for (const id of ids) { const r = await DB.get('att:' + id); if (r?.blob && r.size <= this.MAX) have.push(id); }
+        await DB.set('att-pending', [...new Set([...((await DB.get('att-pending')) || []), ...have])]); await DB.set('att-migrated', true);
+      }
+      for (const id of (await DB.get('att-pending')) || []) {
+        const r = await DB.get('att:' + id);
+        if (r?.blob && !await Sync.file(id, r.blob)) break;
+        await DB.set('att-pending', ((await DB.get('att-pending')) || []).filter(x => x !== id));
+      }
+    } catch (e) { console.warn('Anhang-Upload:', e); }
+    this.busy = false;
+  }
+};
+setInterval(() => Files.run(), 60e3); addEventListener('online', () => Files.run()); setTimeout(() => Files.run(), 4000);
 const attHtml = (id, label) => `<span class="att" data-att="${id}" contenteditable="false">${esc(label)}</span>&nbsp;`;
 $('#anyFile').onchange = async e => {
   const files = [...e.target.files], put = placer(); e.target.value = '';
@@ -175,7 +201,7 @@ $('#anyFile').onchange = async e => {
     if (f.size > 300e6) { toast(`„${f.name}“ ist zu groß (höchstens 300 MB).`); continue; }
     const id = uid();
     try { await DB.set('att:' + id, { name: f.name, type: f.type, size: f.size, blob: f }); } catch { toast('Die Datei konnte nicht gespeichert werden.'); continue; }
-    put(attHtml(id, `📎 ${f.name} (${fmtSize(f.size)})`));
+    put(attHtml(id, `📎 ${f.name} (${fmtSize(f.size)})`)); Files.queue(id, f.size);
   }
 };
 let rec = null;
@@ -183,22 +209,30 @@ async function toggleRecording(b) {
   if (rec) return rec.mr.stop();
   if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) return toast('Dieser Browser kann keine Tonaufnahmen machen.');
   let stream; try { stream = await navigator.mediaDevices.getUserMedia({ audio: true }); } catch { return toast('Kein Zugriff auf das Mikrofon.'); }
-  const mr = new MediaRecorder(stream), chunks = [], t0 = Date.now(), mm = s => Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
+  const mr = new MediaRecorder(stream, { audioBitsPerSecond: 32000 }), chunks = [], // Sprachqualität: 90 Minuten ≈ 22 MB
+     t0 = Date.now(), mm = s => Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
   mr.ondataavailable = e => { if (e.data.size) chunks.push(e.data); };
   mr.onstop = async () => {
     clearInterval(rec.tick); rec = null; stream.getTracks().forEach(t => t.stop()); b.textContent = '● Aufnahme'; b.classList.remove('on');
     const blob = new Blob(chunks, { type: mr.mimeType || 'audio/mp4' }), id = uid(), secs = Math.round((Date.now() - t0) / 1000);
     try { await DB.set('att:' + id, { name: `Aufnahme ${fmtDate(t0)}`, audio: true, type: blob.type, size: blob.size, blob }); } catch { return toast('Die Aufnahme konnte nicht gespeichert werden.'); }
-    placer()(attHtml(id, `🎙 Aufnahme ${fmtDate(t0)} · ${mm(secs)}`));
+    placer()(attHtml(id, `🎙 Aufnahme ${fmtDate(t0)} · ${mm(secs)}`)); Files.queue(id, blob.size);
   };
   mr.start(5000); b.classList.add('on');
   rec = { mr, tick: setInterval(() => b.textContent = '■ Stopp ' + mm(Math.round((Date.now() - t0) / 1000)), 500) };
   toast('Aufnahme läuft – zum Beenden noch einmal auf den Knopf tippen.');
 }
 addEventListener('beforeunload', e => { if (rec) { e.preventDefault(); e.returnValue = ''; } });
-async function openAtt(id) {
+async function openAtt(id, label = '') {
   let r = null; try { r = await DB.get('att:' + id); } catch { }
-  if (!r?.blob) return toast('Diese Datei liegt nur auf dem Gerät, auf dem sie eingefügt wurde.');
+  if (!r?.blob) { // auf diesem Gerät noch nicht vorhanden → aus der Cloud holen und hier aufheben
+    const note = progress('Datei wird geladen …'); let blob = null;
+    try { blob = await Sync.file(id); } catch (e) { console.warn(e); }
+    note.done();
+    if (!blob) return toast(navigator.onLine ? 'Diese Datei ist (noch) nicht in der Cloud – sie liegt nur auf dem Gerät, auf dem sie eingefügt wurde.' : 'Ohne Internet kann die Datei nicht geladen werden.');
+    r = { name: label.replace(/^\S+\s/, '').replace(/\s\([\d,]+ (MB|KB)\)$/, '') || 'Datei', audio: label.startsWith('🎙'), type: blob.type, size: blob.size, blob };
+    try { await DB.set('att:' + id, r); } catch { }
+  }
   const url = URL.createObjectURL(r.blob);
   if (r.audio || /^audio\//.test(r.type)) {
     $('#player')?.remove();
@@ -209,7 +243,7 @@ async function openAtt(id) {
   const a = document.createElement('a'); a.href = url; a.download = r.name; a.click(); setTimeout(() => URL.revokeObjectURL(url), 30e3);
 }
 canvas.addEventListener('click', async e => {
-  const att = e.target.closest('.att'); if (att) { e.preventDefault(); return openAtt(att.dataset.att); }
+  const att = e.target.closest('.att'); if (att) { e.preventDefault(); return openAtt(att.dataset.att, att.textContent); }
   const m = e.target.closest('.math'); if (!m || study) return;
   const bb = m.closest('.bb'), tex = await ask('Formel bearbeiten (LaTeX) – leer lassen zum Entfernen', m.dataset.tex || '', 'Übernehmen'); if (tex === null) return;
   if (tex) { m.dataset.tex = tex; renderMath(m); } else m.remove();

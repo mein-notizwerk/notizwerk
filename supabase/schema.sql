@@ -73,3 +73,18 @@ as $$
 $$;
 revoke all on function public.nw_keepalive() from public;
 grant execute on function public.nw_keepalive() to anon, authenticated;
+
+-- 4) Dateianhänge und Tonaufnahmen: privater Speicher, höchstens 50 MB pro Datei.
+--    Jedes Konto sieht und ändert nur den Ordner mit seiner eigenen Benutzer-ID.
+insert into storage.buckets (id, name, public, file_size_limit)
+values ('nw-files', 'nw-files', false, 52428800)
+on conflict (id) do nothing;
+
+drop policy if exists "nw-files lesen" on storage.objects;
+drop policy if exists "nw-files anlegen" on storage.objects;
+drop policy if exists "nw-files ändern" on storage.objects;
+drop policy if exists "nw-files löschen" on storage.objects;
+create policy "nw-files lesen"   on storage.objects for select to authenticated using (bucket_id = 'nw-files' and (storage.foldername(name))[1] = (select auth.uid())::text);
+create policy "nw-files anlegen" on storage.objects for insert to authenticated with check (bucket_id = 'nw-files' and (storage.foldername(name))[1] = (select auth.uid())::text);
+create policy "nw-files ändern"  on storage.objects for update to authenticated using (bucket_id = 'nw-files' and (storage.foldername(name))[1] = (select auth.uid())::text) with check (bucket_id = 'nw-files' and (storage.foldername(name))[1] = (select auth.uid())::text);
+create policy "nw-files löschen" on storage.objects for delete to authenticated using (bucket_id = 'nw-files' and (storage.foldername(name))[1] = (select auth.uid())::text);
