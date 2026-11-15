@@ -88,3 +88,13 @@ create policy "nw-files lesen"   on storage.objects for select to authenticated 
 create policy "nw-files anlegen" on storage.objects for insert to authenticated with check (bucket_id = 'nw-files' and (storage.foldername(name))[1] = (select auth.uid())::text);
 create policy "nw-files ändern"  on storage.objects for update to authenticated using (bucket_id = 'nw-files' and (storage.foldername(name))[1] = (select auth.uid())::text) with check (bucket_id = 'nw-files' and (storage.foldername(name))[1] = (select auth.uid())::text);
 create policy "nw-files löschen" on storage.objects for delete to authenticated using (bucket_id = 'nw-files' and (storage.foldername(name))[1] = (select auth.uid())::text);
+
+-- 5) Google Drive: Dauer-Token je Konto. Kein Zugriff aus dem Browser – nur die Edge-Function "gdrive"
+--    (mit dem Service-Schlüssel) liest und schreibt hier.
+create table if not exists public.nw_google (
+  user_id    uuid primary key references auth.users (id) on delete cascade,
+  refresh    text not null,
+  updated_at timestamptz not null default now()
+);
+alter table public.nw_google enable row level security;
+revoke all on public.nw_google from anon, authenticated;

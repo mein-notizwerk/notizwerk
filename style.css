@@ -180,6 +180,8 @@ body.nonav #nav{display:none}
 .toast button:hover{background:none}
 
 /* Erweiterungen */
+.bb img[data-att]{background:var(--panel);min-height:40px}
+.bb img.missing{outline:2px dashed var(--line);cursor:pointer}
 .modal .choice{display:block;text-align:left;white-space:normal;border:1px solid var(--line);border-radius:10px;padding:10px 12px}
 .modal .choice:hover{border-color:var(--acc);background:var(--acc-soft)}
 .modal .choice small{display:block;color:var(--mut);margin-top:3px;line-height:1.4}

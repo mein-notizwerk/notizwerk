@@ -6,3 +6,7 @@ window.NOTIZWERK_SUPABASE = {
   url: 'https://disrgcjdirrmjmrhtsoh.supabase.co',
   key: 'sb_publishable_DPOTX7NC23mWNlfbERKhcg_ih77GU3l'
 };
+
+// Google Drive als Ablage für Dateien, Fotos und PDFs (siehe supabase/functions/gdrive).
+// clientId: OAuth-Client-ID aus der Google Cloud Console – sie ist öffentlich, das Client-Secret liegt nur in Supabase.
+window.NOTIZWERK_GOOGLE = { clientId: '' };

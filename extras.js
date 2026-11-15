@@ -99,7 +99,10 @@ const Versions = {
 // ---------- Einfügen an der Schreibmarke ----------
 function htmlOf(bb) { // gespeichert wird die Formel als LaTeX-Text, nicht das gerenderte Bild
   let root = bb;
-  if (bb.querySelector('.math')) { root = bb.cloneNode(true); for (const m of $$('.math', root)) m.textContent = m.dataset.tex || ''; }
+  if (bb.querySelector('.math,img[data-att]')) {
+    root = bb.cloneNode(true); for (const m of $$('.math', root)) m.textContent = m.dataset.tex || '';
+    for (const i of $$('img[data-att]', root)) { i.removeAttribute('src'); i.removeAttribute('style'); i.removeAttribute('class'); }
+  }
   return root.innerHTML.replace(/cloze revealed/g, 'cloze');
 }
 function placer(w = 460) { // merkt sich die Schreibmarke; fügt später dort ein oder legt einen neuen Kasten an
@@ -116,33 +119,34 @@ function renderMath(m) {
   const done = () => { try { m.innerHTML = katex.renderToString(m.dataset.tex || '', { output: 'mathml', throwOnError: false }); } catch { m.textContent = m.dataset.tex || ''; } };
   if (window.katex) done(); else loadScript(KATEX).then(done, () => { });
 }
-function decorate(el) { for (const m of $$('.math', el)) renderMath(m); }
+function decorate(el) { for (const m of $$('.math', el)) renderMath(m); for (const i of $$('img[data-att]', el)) { if (i.dataset.ar) i.style.aspectRatio = i.dataset.ar; i.style.width = '100%'; lazy.observe(i); } }
 
 // ---------- PDF-Folien als Hintergrund ----------
+const PDFJS = CDN + 'pdf.js/3.11.174/';
+async function pdfLib() { await loadScript(PDFJS + 'pdf.min.js'); pdfjsLib.GlobalWorkerOptions.workerSrc = PDFJS + 'pdf.worker.min.js'; }
+// Ausdruck: Auf der Notizseite steht pro PDF-Seite nur ein Verweis (Datei + Seitenzahl + erkannter Text).
+// Das PDF selbst liegt einmal als Anhang vor; jedes Gerät zeichnet die Seiten daraus selbst.
 async function insertPdf(file) {
   if (lockedNow()) return;
-  const note = progress('PDF wird gelesen …'), PDFJS = CDN + 'pdf.js/3.11.174/';
+  const note = progress('PDF wird gelesen …');
   try {
-    await loadScript(PDFJS + 'pdf.min.js'); pdfjsLib.GlobalWorkerOptions.workerSrc = PDFJS + 'pdf.worker.min.js';
-    const pdf = await pdfjsLib.getDocument({ data: await file.arrayBuffer() }).promise, n = pdf.numPages, W = 720, PER = 12;
-    const first = pageOf(), sec = findPage(first.id).sec, name = file.name.replace(/\.pdf$/i, '');
-    if (!first.title) first.title = name;
-    let page = first, y = 24;
-    for (const b of first.blocks) { const el = $(`.block[data-id="${b.id}"]`, canvas); y = Math.max(y, b.y + (el ? el.offsetHeight : 60) + 28); }
-    for (const s of first.strokes) for (let i = 1; i < s.p.length; i += 2) y = Math.max(y, s.p[i] + 28);
+    await pdfLib();
+    const pdf = await pdfjsLib.getDocument({ data: await file.arrayBuffer() }).promise, n = pdf.numPages, W = 720, id = uid();
+    await DB.set('att:' + id, { name: file.name, type: 'application/pdf', size: file.size, blob: file });
+    pdfs.set(id, Promise.resolve(pdf));
+    const page = pageOf(); if (!page.title) page.title = file.name.replace(/\.pdf$/i, '');
+    let y = 24;
+    for (const b of page.blocks) { const el = $(`.block[data-id="${b.id}"]`, canvas); y = Math.max(y, b.y + (el ? el.offsetHeight : 60) + 28); }
+    for (const s of page.strokes) for (let i = 1; i < s.p.length; i += 2) y = Math.max(y, s.p[i] + 28);
     for (let i = 1; i <= n; i++) {
-      note.set(`PDF wird eingefügt … Folie ${i} von ${n}`);
-      if (i > 1 && (i - 1) % PER === 0) { page = addPage(`${name} (${Math.ceil(i / PER)})`, sec, page.id, 1); y = 24; } // lange PDFs auf Unterseiten verteilen
-      const pg = await pdf.getPage(i), v0 = pg.getViewport({ scale: 1 }), vp = pg.getViewport({ scale: 1100 / v0.width }), c = document.createElement('canvas');
-      c.width = Math.round(vp.width); c.height = Math.round(vp.height);
-      const ctx = c.getContext('2d'); ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, c.width, c.height);
-      await pg.render({ canvasContext: ctx, viewport: vp }).promise;
+      if (i % 10 === 0) note.set(`PDF wird eingefügt … Seite ${i} von ${n}`);
+      const pg = await pdf.getPage(i), vp = pg.getViewport({ scale: 1 }), ar = r2(vp.width / vp.height);
       const text = (await pg.getTextContent()).items.map(t => t.str).join(' ').replace(/\s+/g, ' ').trim().slice(0, 5000);
-      page.blocks.push({ id: uid(), x: 40, y, w: W, html: `<div><img src="${c.toDataURL('image/jpeg', .72)}" alt="${esc(text)}"></div>` });
-      y += Math.round((W - 22) * c.height / c.width) + 30; page.updated = Date.now(); c.width = c.height = 0;
+      page.blocks.push({ id: uid(), x: 40, y, w: W, html: `<div><img data-att="${id}" data-pg="${i}" data-ar="${ar}" alt="${esc(text)}"></div>` });
+      y += Math.round((W - 22) / ar) + 30;
     }
-    save(); if (pageOf() === first || pageOf() === page) renderPage(); renderNav();
-    toast(n > PER ? `${n} Folien eingefügt, verteilt auf ${Math.ceil(n / PER)} Seiten` : `${n} ${n === 1 ? 'Folie' : 'Folien'} eingefügt – im Reiter „Zeichnen“ kannst du darauf schreiben`);
+    page.updated = Date.now(); save(); if (pageOf() === page) renderPage(); renderNav(); Files.queue(id, file.size);
+    toast(`${n} ${n === 1 ? 'Seite' : 'Seiten'} eingefügt – im Reiter „Zeichnen“ kannst du darauf schreiben`);
   } catch (e) { console.error(e); toast(e.message === 'offline' ? 'Für PDFs wird beim ersten Mal eine Internetverbindung gebraucht.' : 'Das PDF konnte nicht gelesen werden.'); }
   note.done();
 }
@@ -151,7 +155,8 @@ $('#pdfFile').onchange = e => { const f = e.target.files[0]; e.target.value = ''
 // ---------- Texterkennung in Bildern (läuft auf dem Gerät) ----------
 async function ocrPage() {
   if (lockedNow()) return;
-  const imgs = $$('.bb img', canvas).filter(i => !i.alt); if (!imgs.length) return toast('Auf dieser Seite gibt es kein Bild ohne erkannten Text.');
+  await Promise.all($$('.bb img[data-att]', canvas).map(showImg));
+  const imgs = $$('.bb img', canvas).filter(i => !i.alt && i.src); if (!imgs.length) return toast('Auf dieser Seite gibt es kein Bild ohne erkannten Text.');
   const note = progress('Texterkennung wird geladen …'); let found = 0;
   try {
     await loadScript('https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js');
@@ -167,13 +172,140 @@ async function ocrPage() {
   note.done();
 }
 
+// ---------- Google Drive als Ablage ----------
+// Die Verbindung gilt für das Konto, nicht für das Gerät: Das Dauer-Token liegt in Supabase (Tabelle nw_google),
+// die Edge-Function "gdrive" tauscht es gegen kurzlebige Zugriffstoken. Die App sieht nur Dateien, die sie selbst angelegt hat.
+const Drive = (() => {
+  const cfg = () => window.NOTIZWERK_GOOGLE || {}, api = () => localStorage.getItem('nw:gapi') || 'https://www.googleapis.com';
+  const here = () => location.origin + location.pathname;
+  let tok = null, folderId = null;
+  const on = () => localStorage.getItem('nw:gdrive') === '1';
+  const setOn = v => { v ? localStorage.setItem('nw:gdrive', '1') : localStorage.removeItem('nw:gdrive'); if (!v) { tok = null; folderId = null; } };
+  async function token() {
+    if (tok && tok.exp - Date.now() > 60e3) return tok.t;
+    const j = await Sync.fn('gdrive', { action: 'token' }); if (j === null) return null;        // nicht angemeldet
+    if (!j.access_token) { setOn(false); return null; }
+    tok = { t: j.access_token, exp: Date.now() + (j.expires_in || 3600) * 1000 }; setOn(true); return tok.t;
+  }
+  async function g(path, opt = {}) {
+    const t = await token(); if (!t) return null;
+    const r = await fetch(path.startsWith('http') ? path : api() + path, { ...opt, headers: { Authorization: 'Bearer ' + t, ...(opt.headers || {}) } });
+    if (r.status === 401) tok = null;
+    if (!r.ok) throw new Error('Google Drive: HTTP ' + r.status);
+    return r;
+  }
+  const list = async q => { const r = await g('/drive/v3/files?fields=files(id)&q=' + encodeURIComponent(q + ' and trashed=false')); return r ? (await r.json()).files || [] : null; };
+  const find = async id => { const f = await list(`appProperties has { key='nwid' and value='${id}' }`); return f && f[0] ? f[0].id : null; };
+  async function folder() {
+    if (folderId) return folderId;
+    const f = await list("appProperties has { key='nw' and value='root' } and mimeType='application/vnd.google-apps.folder'");
+    if (f && f[0]) return folderId = f[0].id;
+    const r = await g('/drive/v3/files?fields=id', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: 'Notizwerk', mimeType: 'application/vnd.google-apps.folder', appProperties: { nw: 'root' } }) });
+    return folderId = (await r.json()).id;
+  }
+  async function put(id, blob, name) { // true = liegt in Drive, null = nicht verbunden
+    if (!await token()) return null;
+    if (await find(id)) return true;
+    const type = blob.type || 'application/octet-stream', meta = JSON.stringify({ name: name || id, parents: [await folder()], appProperties: { nwid: id } });
+    if (blob.size <= 4e6) { // klein: ein einziger Aufruf
+      const b = 'nw' + uid() + uid(), body = new Blob([`--${b}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${meta}\r\n--${b}\r\nContent-Type: ${type}\r\n\r\n`, blob, `\r\n--${b}--`]);
+      await g('/upload/drive/v3/files?uploadType=multipart&fields=id', { method: 'POST', headers: { 'Content-Type': 'multipart/related; boundary=' + b }, body });
+    } else {                // groß: erst anmelden, dann die Daten schicken
+      const r = await g('/upload/drive/v3/files?uploadType=resumable&fields=id', { method: 'POST', headers: { 'Content-Type': 'application/json; charset=UTF-8', 'X-Upload-Content-Type': type }, body: meta });
+      const loc = r.headers.get('Location'); if (!loc) throw new Error('Google Drive: keine Upload-Adresse');
+      await g(loc, { method: 'PUT', headers: { 'Content-Type': type }, body: blob });
+    }
+    return true;
+  }
+  async function get(id) { const fid = await find(id); if (!fid) return null; return (await g(`/drive/v3/files/${fid}?alt=media`)).blob(); }
+  function connect() {
+    if (!cfg().clientId) return toast('Google Drive ist noch nicht eingerichtet.');
+    const state = uid() + uid(); localStorage.setItem('nw:gstate', state);
+    location.href = 'https://accounts.google.com/o/oauth2/v2/auth?' + new URLSearchParams({ client_id: cfg().clientId, redirect_uri: here(), response_type: 'code', scope: 'https://www.googleapis.com/auth/drive.file', access_type: 'offline', prompt: 'consent', state });
+  }
+  async function finish(code, state) { // Rückkehr von Google: Code gegen Token tauschen (macht die Edge-Function)
+    if (state !== localStorage.getItem('nw:gstate')) return toast('Die Verbindung mit Google Drive wurde abgebrochen.');
+    localStorage.removeItem('nw:gstate');
+    try {
+      const j = await Sync.fn('gdrive', { action: 'connect', code, redirect_uri: here() });
+      if (!j?.access_token) throw new Error(j === null ? 'Bitte zuerst bei Notizwerk-Sync anmelden.' : 'keine Antwort');
+      tok = { t: j.access_token, exp: Date.now() + (j.expires_in || 3600) * 1000 }; setOn(true);
+      toast('Google Drive ist verbunden – Dateien, Fotos und PDFs liegen ab jetzt dort.'); Files.run();
+    } catch (e) { console.warn(e); toast('Google Drive konnte nicht verbunden werden: ' + e.message); }
+  }
+  async function start() {
+    const q = new URLSearchParams(location.search);
+    if (q.get('code') || q.get('error')) { history.replaceState(null, '', location.pathname); if (q.get('code')) return finish(q.get('code'), q.get('state')); toast('Die Verbindung mit Google Drive wurde abgebrochen.'); }
+    if (cfg().clientId && Sync.loggedIn) token().catch(() => { }); // ist das Konto (vielleicht auf einem anderen Gerät) schon verbunden?
+  }
+  function panel(el) {
+    if (!cfg().clientId) { el.innerHTML = '<p style="font-size:12px"><b>Google Drive:</b> noch nicht eingerichtet. Dateien liegen im Supabase-Speicher.</p>'; return; }
+    el.innerHTML = on()
+      ? '<p style="font-size:12px"><b>Google Drive: verbunden.</b> Dateien, Fotos und PDFs liegen im Drive-Ordner „Notizwerk“. <button type="button" class="ghost" data-g="off" style="padding:2px 8px">Trennen</button></p>'
+      : '<p style="font-size:12px"><b>Google Drive: nicht verbunden.</b> Verbinde es einmal – das gilt dann für alle deine Geräte. <button type="button" class="ghost" data-g="on" style="padding:2px 8px">Verbinden</button></p>';
+    el.onclick = async e => {
+      const b = e.target.closest('[data-g]'); if (!b) return;
+      if (b.dataset.g === 'on') return connect();
+      if (!await confirmBox('Google Drive trennen?', 'Die Dateien bleiben in deinem Drive. Fotos und PDFs, die dort liegen, lassen sich danach aber nur noch auf Geräten öffnen, die sie schon geladen haben.', 'Trennen')) return;
+      try { await Sync.fn('gdrive', { action: 'disconnect' }); } catch (e) { console.warn(e); }
+      setOn(false); toast('Google Drive getrennt.');
+    };
+  }
+  return { on, put, get, start, panel, token };
+})();
+// Ablage: Google Drive, wenn verbunden – sonst der Supabase-Speicher (bis 50 MB je Datei).
+const Store = {
+  async put(id, blob, name) { if (Drive.on()) return Drive.put(id, blob, name); return blob.size > Files.MAX ? true : Sync.file(id, blob); },
+  async get(id) { let b = null; if (Drive.on()) b = await Drive.get(id).catch(e => (console.warn(e), null)); return b || Sync.file(id); }
+};
+
+// ---------- Ausgelagerte Bilder und PDF-Seiten anzeigen ----------
+// <img data-att="ID"> = Foto, <img data-att="ID" data-pg="3"> = Seite 3 eines PDFs. Das Bild entsteht erst auf dem Gerät.
+const blobs = new Map(), urls = new Map(), pdfs = new Map();
+function attBlob(id) { // lokal vorhanden? sonst aus der Ablage holen und hier aufheben
+  if (!blobs.has(id)) blobs.set(id, (async () => {
+    const r = await DB.get('att:' + id).catch(() => null); if (r?.blob) return r.blob;
+    const b = await Store.get(id).catch(() => null);
+    if (b) DB.set('att:' + id, { name: '', type: b.type, size: b.size, blob: b }).catch(() => { }); else blobs.delete(id);
+    return b;
+  })());
+  return blobs.get(id);
+}
+async function pdfPage(id, blob, n) {
+  await pdfLib();
+  if (!pdfs.has(id)) pdfs.set(id, blob.arrayBuffer().then(d => pdfjsLib.getDocument({ data: d }).promise));
+  const pg = await (await pdfs.get(id)).getPage(n), vp = pg.getViewport({ scale: 1400 / pg.getViewport({ scale: 1 }).width }), c = document.createElement('canvas');
+  c.width = Math.round(vp.width); c.height = Math.round(vp.height);
+  const ctx = c.getContext('2d'); ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, c.width, c.height);
+  await pg.render({ canvasContext: ctx, viewport: vp }).promise;
+  const out = await new Promise(r => c.toBlob(r, 'image/jpeg', .85)); c.width = c.height = 0; return URL.createObjectURL(out);
+}
+function showImg(img) {
+  const id = img.dataset.att, pg = +img.dataset.pg || 0, key = id + ':' + pg;
+  if (!urls.has(key)) urls.set(key, attBlob(id).then(b => b ? (pg ? pdfPage(id, b, pg) : URL.createObjectURL(b)) : null).catch(e => (console.warn(e), null)).then(u => { if (!u) urls.delete(key); return u; }));
+  return urls.get(key).then(u => { img.classList.toggle('missing', !u); if (u && img.src !== u) img.src = u; return !!u; });
+}
+const lazy = new IntersectionObserver(es => { for (const e of es) if (e.isIntersecting) { lazy.unobserve(e.target); showImg(e.target); } }, { root: scroller, rootMargin: '1200px' });
+canvas.addEventListener('click', async e => { // fehlendes Bild antippen = noch einmal versuchen
+  const i = e.target.closest?.('img.missing'); if (!i) return;
+  if (!await showImg(i)) toast(navigator.onLine ? 'Dieses Bild liegt noch nicht in der Ablage – es wird vom anderen Gerät noch hochgeladen.' : 'Ohne Internet kann das Bild nicht geladen werden.');
+});
+// Neues Foto: mit Google Drive wird es ausgelagert, sonst steht es wie bisher direkt in der Notiz.
+async function imgHtml(dataUrl) {
+  if (!Drive.on()) return `<img src="${dataUrl}">`;
+  const blob = await (await fetch(dataUrl)).blob(), im = new Image(); im.src = dataUrl; await im.decode();
+  const id = uid(); await DB.set('att:' + id, { name: 'Bild ' + fmtDate(Date.now()).replace(/[.:]/g, '-') + '.' + (blob.type.split('/')[1] || 'jpg'), type: blob.type, size: blob.size, blob });
+  Files.queue(id, blob.size);
+  return `<img data-att="${id}" data-ar="${r2(im.width / im.height)}">`;
+}
+
 // ---------- Dateianhänge und Tonaufnahmen ----------
 // Die Datei liegt lokal in IndexedDB (att:<id>) und wird zusätzlich in den Cloud-Speicher hochgeladen.
 // Andere Geräte laden sie beim ersten Öffnen herunter.
 const Files = {
   MAX: 50e6, busy: false,
   async queue(id, size) {
-    if (size > this.MAX) return toast('Größer als 50 MB – diese Datei bleibt nur auf diesem Gerät.');
+    if (size > this.MAX && !Drive.on()) return toast('Größer als 50 MB – ohne Google Drive bleibt diese Datei nur auf diesem Gerät.');
     await DB.set('att-pending', [...((await DB.get('att-pending')) || []), id]); this.run();
   },
   async run() { // lädt alles hoch, was noch aussteht; bricht ab, wenn nicht angemeldet oder offline
@@ -181,12 +313,12 @@ const Files = {
     try {
       if (!await DB.get('att-migrated')) { // einmalig: Anhänge aus der Zeit vor der Synchronisation nachreichen
         const ids = new Set(); for (const { page } of allPages()) for (const b of page.blocks) for (const m of b.html.matchAll(/data-att="([a-z0-9]+)"/gi)) ids.add(m[1]);
-        const have = []; for (const id of ids) { const r = await DB.get('att:' + id); if (r?.blob && r.size <= this.MAX) have.push(id); }
+        const have = []; for (const id of ids) { const r = await DB.get('att:' + id); if (r?.blob && (r.size <= this.MAX || Drive.on())) have.push(id); }
         await DB.set('att-pending', [...new Set([...((await DB.get('att-pending')) || []), ...have])]); await DB.set('att-migrated', true);
       }
       for (const id of (await DB.get('att-pending')) || []) {
         const r = await DB.get('att:' + id);
-        if (r?.blob && !await Sync.file(id, r.blob)) break;
+        if (r?.blob && !await Store.put(id, r.blob, r.name)) break;
         await DB.set('att-pending', ((await DB.get('att-pending')) || []).filter(x => x !== id));
       }
     } catch (e) { console.warn('Anhang-Upload:', e); }
@@ -208,13 +340,13 @@ async function addFiles(files, put = placer()) {
   if (lockedNow()) return;
   for (const f of files) {
     if (f.size > 300e6) { toast(`„${f.name}“ ist zu groß (höchstens 300 MB).`); continue; }
-    const head = `„${f.name}“ (${fmtSize(f.size)}) einfügen`, local = f.size > Files.MAX ? ' Über 50 MB: bleibt nur auf diesem Gerät.' : '';
+    const head = `„${f.name}“ (${fmtSize(f.size)}) einfügen`, local = f.size > Files.MAX && !Drive.on() ? ' Über 50 MB: bleibt ohne Google Drive nur auf diesem Gerät.' : '';
     let how = 'att';
     if (f.type === 'application/pdf' || /\.pdf$/i.test(f.name)) how = await pick(head, [
-      { k: 'print', label: 'Als Ausdruck', text: 'Jede Seite liegt als Bild auf der Notizseite. Du kannst darauf schreiben, der Text ist durchsuchbar. Macht die Notiz größer: etwa 20–100 KB pro PDF-Seite.' },
+      { k: 'print', label: 'Als Ausdruck', text: 'Jede Seite ist auf der Notizseite zu sehen. Du kannst darauf schreiben, der Text ist durchsuchbar. Gespeichert wird nur das PDF selbst, einmal.' + local },
       { k: 'att', label: 'Nur als Link', text: 'In der Notiz steht ein kleiner Eintrag, das PDF öffnet sich beim Antippen. Die Notiz bleibt klein und schnell.' + local }]);
     else if (/^image\/(png|jpe?g|gif|webp)$/.test(f.type)) how = await pick(head, [
-      { k: 'img', label: 'Als Bild anzeigen', text: 'Das Foto ist direkt in der Notiz sichtbar. Es wird dafür verkleinert, meist auf 0,1–0,5 MB – das spart am meisten Platz.' },
+      { k: 'img', label: 'Als Bild anzeigen', text: 'Das Foto ist direkt in der Notiz sichtbar. Es wird dafür verkleinert, meist auf 0,1–0,5 MB.' },
       { k: 'att', label: 'Nur als Link', text: 'In der Notiz steht ein kleiner Eintrag, das Foto bleibt in Originalgröße erhalten und öffnet sich beim Antippen.' + local }]);
     if (!how) continue;
     if (how === 'print') { await insertPdf(f); continue; }
@@ -248,7 +380,7 @@ async function openAtt(id, label = '') {
   let r = null; try { r = await DB.get('att:' + id); } catch { }
   if (!r?.blob) { // auf diesem Gerät noch nicht vorhanden → aus der Cloud holen und hier aufheben
     const note = progress('Datei wird geladen …'); let blob = null;
-    try { blob = await Sync.file(id); } catch (e) { console.warn(e); }
+    try { blob = await Store.get(id); } catch (e) { console.warn(e); }
     note.done();
     if (!blob) return toast(navigator.onLine ? 'Diese Datei ist (noch) nicht in der Cloud – sie liegt nur auf dem Gerät, auf dem sie eingefügt wurde.' : 'Ohne Internet kann die Datei nicht geladen werden.');
     r = { name: label.replace(/^\S+\s/, '').replace(/\s\([\d,]+ (MB|KB)\)$/, '') || 'Datei', audio: label.startsWith('🎙'), type: blob.type, size: blob.size, blob };
@@ -294,7 +426,19 @@ function clipperDialog() {
 async function sharePage() {
   if (lockedNow()) return;
   const p = pageOf(), title = p.title || 'Unbenannte Seite';
-  const blocks = p.blocks.map(b => `<div class="b" style="left:${b.x}px;top:${b.y}px;width:${b.w}px">${b.html}</div>`).join('');
+  // ausgelagerte Bilder und PDF-Seiten werden für die Datei fest eingebettet
+  await Promise.all($$('.bb img[data-att]', canvas).map(i => showImg(i).then(() => i.decode()).catch(() => { })));
+  const blocks = p.blocks.map(b => {
+    const bb = $(`.block[data-id="${b.id}"] .bb`, canvas); if (!bb || !bb.querySelector('img[data-att]')) return `<div class="b" style="left:${b.x}px;top:${b.y}px;width:${b.w}px">${b.html}</div>`;
+    const c = bb.cloneNode(true), live = $$('img[data-att]', bb);
+    $$('img[data-att]', c).forEach((im, k) => {
+      const src = live[k]; im.removeAttribute('class'); if (!src.naturalWidth) return;
+      const cv = document.createElement('canvas'), f = Math.min(1, 1400 / src.naturalWidth); cv.width = src.naturalWidth * f; cv.height = src.naturalHeight * f;
+      cv.getContext('2d').drawImage(src, 0, 0, cv.width, cv.height); im.src = cv.toDataURL('image/jpeg', .8);
+    });
+    for (const m of $$('.math', c)) m.textContent = m.dataset.tex || '';
+    return `<div class="b" style="left:${b.x}px;top:${b.y}px;width:${b.w}px">${c.innerHTML}</div>`;
+  }).join('');
   const html = `<!doctype html><html lang="de"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>${esc(title)}</title>
 <style>body{font:15px/1.55 system-ui,sans-serif;margin:24px;color:#1f2328}h1.t{font-weight:400;margin:0 0 4px}small.t{color:#6b7280}.pg{position:relative;margin-top:18px;width:${canvas.offsetWidth}px;height:${canvas.offsetHeight}px}.b{position:absolute;padding:4px 10px}.b img{max-width:100%}
 .b table{border-collapse:collapse;width:100%}.b td,.b th{border:1px solid #ddd;padding:4px 8px}.b ul.todo{list-style:none;padding-left:0}.b ul.todo li::before{content:"☐ "}.b ul.todo li.done::before{content:"☑ "}.b .att{background:#eee;border-radius:6px;padding:1px 8px}

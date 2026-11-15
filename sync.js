@@ -323,6 +323,7 @@ const Sync = (() => {
       show(`<h3>Synchronisation</h3><p>Angemeldet als <b>${esc(meta.session.email)}</b>.<br>
         Status: ${esc(LABEL[status] || status)}${statusMsg ? ' – ' + esc(statusMsg) : ''}${meta.last ? '<br>Zuletzt abgeglichen: ' + fmtDate(meta.last) : ''}</p>
         <p style="font-size:12px">Änderungen werden automatisch hochgeladen; andere Geräte holen sie beim Öffnen und alle 30 Sekunden ab.</p>
+        <div id="gdrive"></div>
         <div class="row" style="flex-wrap:wrap"><button type="button" class="ghost" data-out style="margin-right:auto">Abmelden</button><button type="button" class="ghost" data-x>Schließen</button><button class="primary">Jetzt abgleichen</button></div>`, () => { closeOverlay(); sync(); });
       $('[data-out]', box).onclick = async () => {
         try { await call('/auth/v1/logout', { method: 'POST' }); } catch { }
@@ -330,6 +331,7 @@ const Sync = (() => {
         meta.session.refresh = null; await saveMeta(); closeOverlay(); setStatus('login'); toast('Abgemeldet – die Notizen bleiben auf diesem Gerät.');
       };
     }
+    if ($('#gdrive', box)) Drive.panel($('#gdrive', box));
     box.addEventListener('click', e => { if (e.target.closest('[data-x]')) closeOverlay(); });
     openOverlay(box); $('input', box)?.focus();
   }
@@ -356,6 +358,12 @@ const Sync = (() => {
     return blob ? true : await r.blob();
   }
 
+  // Ruft eine Supabase-Edge-Function mit dem angemeldeten Konto auf (für die Google-Drive-Verbindung).
+  async function fn(name, body) {
+    if (!configured() || !loggedIn()) return null;
+    return call('/functions/v1/' + name, { method: 'POST', body });
+  }
+
   async function start() {
     const m = await DB.get('sync'); if (m) meta = Object.assign(meta, m);
     setStatus(!configured() ? 'off' : loggedIn() ? 'busy' : 'login');
@@ -365,5 +373,5 @@ const Sync = (() => {
     addEventListener('online', () => sync());
     addEventListener('offline', () => setStatus('offline'));
   }
-  return { start, sync, changed, dialog, file, get status() { return status; } };
+  return { start, sync, changed, dialog, file, fn, get loggedIn() { return loggedIn(); }, get status() { return status; } };
 })();

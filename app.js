@@ -143,6 +143,8 @@ function sanitize(html, pasted = false) {
         else if (n2 === 'data-tag') keep = v in TAGS;
         else if (n2 === 'data-tex') keep = v.length <= 2000;
         else if (n2 === 'data-att') keep = /^[a-z0-9]+$/i.test(v);
+        else if (n2 === 'data-pg') keep = /^\d{1,4}$/.test(v);
+        else if (n2 === 'data-ar') keep = /^\d+(\.\d+)?$/.test(v);
         else if (n2 === 'contenteditable') keep = v === 'false';
         else if (n2 === 'style') { const k = cleanStyle(v); if (k) { c.setAttribute('style', k); keep = true; } }
         if (!keep) c.removeAttribute(a.name);
@@ -588,10 +590,10 @@ async function fileToDataURL(file) {
 async function insertImage(file, pos) {
   if (!/^image\/(png|jpe?g|gif|webp)$/.test(file.type)) return toast('Dieses Bildformat wird nicht unterstützt.');
   const bb = !pos && activeBB(), range = bb && getSelection().getRangeAt(0).cloneRange();
-  let url; try { url = await fileToDataURL(file); } catch { return toast('Bild konnte nicht gelesen werden.'); }
-  if (bb && bb.isConnected) { bb.focus(); const s = getSelection(); s.removeAllRanges(); s.addRange(range); exec('insertHTML', `<img src="${url}">`); syncBlock(bb); return; }
+  let url, tag; try { url = await fileToDataURL(file); tag = await imgHtml(url); } catch { return toast('Bild konnte nicht gelesen werden.'); }
+  if (bb && bb.isConnected) { bb.focus(); const s = getSelection(); s.removeAllRanges(); s.addRange(range); exec('insertHTML', tag); decorate(bb); syncBlock(bb); return; }
   const [x, y] = pos || viewPos();
-  const el = newBlock(x, y, `<div><img src="${url}"></div><div><br></div>`, 420);
+  const el = newBlock(x, y, `<div>${tag}</div><div><br></div>`, 420);
   const im = $('img', el); const fin = () => fitCanvas(); im.complete ? fin() : im.onload = fin; touch(pageOf());
 }
 $('#imgFile').onchange = e => { [...e.target.files].forEach(f => insertImage(f)); e.target.value = ''; };
@@ -1104,5 +1106,5 @@ document.addEventListener('visibilitychange', () => { if (document.hidden && sav
   applyTheme(); renderDrawTools(); render(); $('#saveState').textContent = 'Gespeichert';
   handleClip();
   if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(() => { });
-  if (typeof Sync !== 'undefined') Sync.start();
+  if (typeof Sync !== 'undefined') { await Sync.start(); Drive.start(); }
 })();
