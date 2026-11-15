@@ -20,6 +20,8 @@
       <button data-act="nav" title="Navigation ein-/ausblenden">☰</button>
       <span class="brand">Notizwerk</span>
       <button id="searchBox" data-act="search" title="Alle Notizen durchsuchen">Suchen <kbd>⌘K</kbd></button>
+      <button data-act="undo" title="Rückgängig (Strg/⌘+Z)">↶</button>
+      <button data-act="redo" title="Wiederholen (Strg/⌘+Umschalt+Z)">↷</button>
       <span id="saveState"></span>
       <button id="syncBtn" data-act="sync" title="Synchronisation">☁ Sync</button>
       <button data-act="theme" title="Hell/Dunkel">◐</button>
@@ -55,9 +57,15 @@
       <div class="rb" data-rb="insert" hidden>
         <button data-act="table" title="Tabelle einfügen">▦ Tabelle</button>
         <button data-act="image" title="Bild einfügen">▣ Bild</button>
+        <button data-act="pdf" title="PDF oder Vorlesungsfolien als Hintergrund einfügen – zum Draufschreiben">▤ PDF-Folien</button>
+        <button data-act="attach" title="Beliebige Datei anhängen">📎 Datei</button>
+        <button data-act="audio" title="Tonaufnahme starten/stoppen">● Aufnahme</button>
+        <button data-act="formula" title="Formel in LaTeX-Schreibweise">∑ Formel</button>
         <span class="sep"></span>
         <button data-act="link" title="Weblink">Link</button>
         <button data-act="plink" title="Auf eine andere Seite verlinken (oder [[Titel]] tippen)">Seitenlink</button>
+        <span class="sep"></span>
+        <button data-act="ocr" title="Text in den Bildern dieser Seite erkennen, damit die Suche ihn findet">Texterkennung</button>
         <span class="sep"></span>
         <button data-act="newpage" title="Neue Seite (Alt+N)">+ Neue Seite</button>
       </div>
@@ -67,6 +75,8 @@
           <button data-act="mode" data-mode="pen" title="Stift">Stift</button>
           <button data-act="mode" data-mode="marker" title="Textmarker">Marker</button>
           <button data-act="mode" data-mode="erase" title="Radierer">Radierer</button>
+          <button data-act="mode" data-mode="lasso" title="Gezeichnetes auswählen, verschieben, vergrößern">Lasso</button>
+          <button data-act="shapes" title="Linie, Pfeil, Rechteck, Ellipse">Formen ▾</button>
         </div>
         <div class="grp" id="drawtools" hidden></div>
       </div>
@@ -74,6 +84,10 @@
         <button data-act="nav" title="Navigation ein-/ausblenden">☰ Navigation</button>
         <button data-act="paper" title="Seitenhintergrund">Hilfslinien ▾</button>
         <button data-act="theme" title="Hell/Dunkel">◐ Dunkler Modus</button>
+        <span class="sep"></span>
+        <button data-act="zoomout" title="Verkleinern">−</button>
+        <button data-act="zoom0" id="zoomLbl" title="Zurück auf 100 %">100 %</button>
+        <button data-act="zoomin" title="Vergrößern">+</button>
       </div>
     </div>
   </header>
@@ -91,7 +105,8 @@
           <input id="title" placeholder="Unbenannte Seite" autocomplete="off">
           <div id="meta"></div>
         </div>
-        <div id="canvas"><svg id="ink"></svg></div>
+        <div id="zoombox"><div id="canvas"><svg id="ink"></svg></div></div>
+        <div id="lockscreen"><p>🔒 Dieser Abschnitt ist gesperrt.</p><button class="primary" id="unlockBtn">Entsperren</button></div>
         <div id="backlinks"></div>
       </div>
     </main>
@@ -100,9 +115,12 @@
 <div id="overlay"></div>
 <div id="toasts"></div>
 <input type="file" id="imgFile" accept="image/*" multiple hidden>
+<input type="file" id="pdfFile" accept="application/pdf,.pdf" hidden>
+<input type="file" id="anyFile" multiple hidden>
 <input type="file" id="jsonFile" accept=".json,application/json" hidden>
 <script src="config.js"></script>
 <script src="app.js"></script>
+<script src="extras.js"></script>
 <script src="sync.js"></script>
 </body>
 </html>

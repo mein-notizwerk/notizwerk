@@ -26,7 +26,7 @@ const Sync = (() => {
     const c = hcache.get(p); if (c && c.k === k) return c.h;
     const h = fnv(JSON.stringify(p)); hcache.set(p, { k, h }); return h;
   }
-  const structOf = nbs => nbs.map(n => ({ id: n.id, name: n.name, color: n.color, sections: n.sections.map(s => ({ id: s.id, name: s.name, color: s.color, pages: s.pages.map(p => typeof p === 'string' ? p : p.id) })) }));
+  const structOf = nbs => nbs.map(n => ({ id: n.id, name: n.name, color: n.color, sections: n.sections.map(s => ({ id: s.id, name: s.name, color: s.color, lvl: s.lvl || 0, lock: s.lock || '', pages: s.pages.map(p => typeof p === 'string' ? p : p.id) })) }));
   function localRows() {
     const rows = new Map(), struct = { notebooks: structOf(state.notebooks) };
     rows.set('struct', { kind: 'struct', status: 'live', h: fnv(JSON.stringify(struct)), body: () => struct });
@@ -81,7 +81,7 @@ const Sync = (() => {
     const nbs = (st.notebooks || []).map(n => {
       const on = old.find(o => o.id === n.id);
       return { id: n.id, name: n.name, color: n.color, last: on?.last, sections: (n.sections || []).map(s => ({
-        id: s.id, name: s.name, color: s.color, last: on?.sections.find(x => x.id === s.id)?.last,
+        id: s.id, name: s.name, color: s.color, lvl: s.lvl || 0, lock: s.lock || '', last: on?.sections.find(x => x.id === s.id)?.last,
         pages: (s.pages || []).map(pid => { const x = where.get(pid); if (!x || used.has(pid)) return null; used.add(pid); return x.page; }).filter(Boolean)
       })) };
     });
@@ -163,6 +163,7 @@ const Sync = (() => {
     }
     await DB.set('state', state);
     if (accepted.some(r => r.id === curId) || !findPage(curId)) render(); else renderNav();
+    Hist.reset(); // Seiten wurden ersetzt – der Rückgängig-Verlauf passt nicht mehr
     return true;
   }
   const contentKey = p => JSON.stringify([p.title || '', p.blocks || [], p.strokes || [], p.paper || '', p.lvl || 0]);
@@ -179,7 +180,7 @@ const Sync = (() => {
     };
     return merge(base, local, remote, (b, l, r) => ({
       id: r.id, name: pick(b, l, r, 'name'), color: pick(b, l, r, 'color'),
-      sections: merge(b?.sections, l?.sections, r.sections, (bs, ls, rs) => ({ id: rs.id, name: pick(bs, ls, rs, 'name'), color: pick(bs, ls, rs, 'color'), pages: rs.pages }))
+      sections: merge(b?.sections, l?.sections, r.sections, (bs, ls, rs) => ({ id: rs.id, name: pick(bs, ls, rs, 'name'), color: pick(bs, ls, rs, 'color'), lvl: pick(bs, ls, rs, 'lvl'), lock: pick(bs, ls, rs, 'lock'), pages: rs.pages }))
     }));
   }
 
@@ -243,7 +244,7 @@ const Sync = (() => {
       if (!state.notebooks.length) state.notebooks.push(mkNotebook('Mein Notizbuch'));
     }
     meta.synced = true; await saveMeta();
-    await push(); render(); await DB.set('state', state);
+    await push(); render(); Hist.reset(); await DB.set('state', state);
     return true;
   }
 

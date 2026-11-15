@@ -16,8 +16,9 @@ const HILITES = ['rgba(255,212,0,.45)', 'rgba(90,220,130,.4)', 'rgba(110,180,255
 const TAGS = { wichtig: '★ Wichtig', frage: '? Frage', merke: '✎ Merke', pruefung: '◎ Prüfungsrelevant' };
 const parser = new DOMParser();
 
-const canvas = $('#canvas'), ink = $('#ink'), titleEl = $('#title'), overlay = $('#overlay'), scroller = $('#scroller');
-let state, mode = 'text', study = false;
+const canvas = $('#canvas'), ink = $('#ink'), titleEl = $('#title'), overlay = $('#overlay'), scroller = $('#scroller'), zoombox = $('#zoombox');
+let state, mode = 'text', study = false, Z = 1; // Z = Zoomfaktor der Seite
+const unlocked = new Set(), isLocked = sec => !!sec.lock && !unlocked.has(sec.id);
 
 // ---------- Speicher ----------
 const DB = {
@@ -45,7 +46,7 @@ const DB = {
   }
 };
 let saveT = null;
-function save() { $('#saveState').textContent = 'Speichert …'; clearTimeout(saveT); saveT = setTimeout(flush, 400); }
+function save() { Hist.mark(); $('#saveState').textContent = 'Speichert …'; clearTimeout(saveT); saveT = setTimeout(flush, 400); }
 async function flush() {
   clearTimeout(saveT); saveT = null;
   try { await DB.set('state', state); $('#saveState').textContent = 'Gespeichert'; if (typeof Sync !== 'undefined') Sync.changed(); }
@@ -117,7 +118,7 @@ function touch(p) { p.updated = Date.now(); renderMeta(); save(); clearTimeout(n
 // ---------- HTML säubern ----------
 const OK_TAGS = new Set('DIV P BR SPAN B STRONG I EM U S STRIKE H1 H2 H3 UL OL LI BLOCKQUOTE PRE CODE A IMG TABLE TBODY THEAD TR TD TH HR SUB SUP'.split(' '));
 const DROP_TAGS = /^(SCRIPT|STYLE|IFRAME|OBJECT|EMBED|META|LINK|TITLE|HEAD|SVG|MATH|FORM|INPUT|BUTTON|TEXTAREA|SELECT|NOSCRIPT|TEMPLATE|VIDEO|AUDIO)$/;
-const OK_CLASS = new Set(['cloze', 'todo', 'done', 'plink']);
+const OK_CLASS = new Set(['cloze', 'todo', 'done', 'plink', 'math', 'att']);
 const cleanStyle = s => s.split(';').map(x => x.trim()).filter(x => /^(color|background-color|font-weight|font-style|text-decoration(-line)?|text-align)\s*:/i.test(x) && !/url|expression|javascript/i.test(x)).join(';');
 function sanitize(html, pasted = false) {
   const doc = parser.parseFromString('<body>' + html, 'text/html');
@@ -135,10 +136,14 @@ function sanitize(html, pasted = false) {
         if (n2 === 'href') keep = /^(https?:|mailto:)/i.test(v.trim());
         else if (n2 === 'src') keep = /^(data:image\/(png|jpe?g|gif|webp);base64,|https?:)/i.test(v.trim());
         else if (n2 === 'colspan' || n2 === 'rowspan') keep = /^\d+$/.test(v);
+        else if (n2 === 'alt') keep = v.length <= 6000;
         else if (pasted) keep = false;
         else if (n2 === 'class') { const k = v.split(/\s+/).filter(x => OK_CLASS.has(x)).join(' '); if (k) { c.setAttribute('class', k); keep = true; } }
         else if (n2 === 'data-page') keep = /^[a-z0-9]+$/i.test(v);
         else if (n2 === 'data-tag') keep = v in TAGS;
+        else if (n2 === 'data-tex') keep = v.length <= 2000;
+        else if (n2 === 'data-att') keep = /^[a-z0-9]+$/i.test(v);
+        else if (n2 === 'contenteditable') keep = v === 'false';
         else if (n2 === 'style') { const k = cleanStyle(v); if (k) { c.setAttribute('style', k); keep = true; } }
         if (!keep) c.removeAttribute(a.name);
       }
@@ -151,7 +156,7 @@ const htmlEmpty = html => !/<(img|table|hr)\b/i.test(html) && !html.replace(/<[^
 const textCache = new WeakMap();
 function pageText(p) {
   const c = textCache.get(p); if (c && c.u === p.updated) return c.t;
-  const t = p.blocks.map(b => parser.parseFromString(b.html.replace(/<(div|br|li|p|h\d|td|tr|blockquote|pre)\b/gi, ' <$1'), 'text/html').body.textContent).join(' ').replace(/\s+/g, ' ').trim();
+  const t = p.blocks.map(b => { const d = parser.parseFromString(b.html.replace(/<(div|br|li|p|h\d|td|tr|blockquote|pre)\b/gi, ' <$1'), 'text/html').body; return d.textContent + (b.html.includes(' alt=') ? ' ' + $$('img[alt]', d).map(i => i.alt).join(' ') : ''); }).join(' ').replace(/\s+/g, ' ').trim();
   textCache.set(p, { u: p.updated, t }); return t;
 }
 
@@ -164,11 +169,11 @@ function closeOverlay() {
   const f = overlayClose; overlayClose = null; f && f();
 }
 overlay.addEventListener('mousedown', e => { if (e.target === overlay) closeOverlay(); });
-function ask(label, value = '', okLabel = 'OK') {
+function ask(label, value = '', okLabel = 'OK', type = 'text') {
   return new Promise(res => {
     let done = false; const fin = v => { if (done) return; done = true; res(v); closeOverlay(); };
     const f = h(`<form class="modal"><h3>${esc(label)}</h3><input><div class="row"><button type="button" class="ghost">Abbrechen</button><button class="primary">${esc(okLabel)}</button></div></form>`);
-    const inp = $('input', f); inp.value = value;
+    const inp = $('input', f); inp.type = type; inp.value = value;
     f.onsubmit = e => { e.preventDefault(); fin(inp.value.trim()); };
     $('.ghost', f).onclick = () => fin(null);
     openOverlay(f, () => fin(null)); inp.focus(); inp.select();
@@ -229,8 +234,8 @@ function renderNav() {
   ensure();
   const nb = nbOf(), sec = secOf(), page = pageOf();
   $('#nbBtn').innerHTML = `<span class="dot" style="background:${esc(nb.color)}"></span><b>${esc(nb.name)}</b><span>▾</span>`;
-  $('#sections').innerHTML = nb.sections.map(s => `<div class="sec${s.id === sec.id ? ' on' : ''}" draggable="true" data-id="${s.id}" style="--c:${esc(s.color)}" title="${esc(s.name)}">${esc(s.name)}${MORE}</div>`).join('');
-  $('#pages').innerHTML = sec.pages.map(p => {
+  $('#sections').innerHTML = nb.sections.map(s => `<div class="sec lvl${s.lvl || 0}${s.id === sec.id ? ' on' : ''}" draggable="true" data-id="${s.id}" style="--c:${esc(s.color)}" title="${esc(s.name)}">${s.lock ? (isLocked(s) ? '🔒 ' : '🔓 ') : ''}${esc(s.name)}${MORE}</div>`).join('');
+  $('#pages').innerHTML = isLocked(sec) ? '<div class="pglock">🔒 Gesperrt</div>' : sec.pages.map(p => {
     const prev = pageText(p).slice(0, 70);
     return `<div class="pg lvl${p.lvl || 0}${p.id === page.id ? ' on' : ''}" draggable="true" data-id="${p.id}" style="--c:${esc(sec.color)}"><span class="t${p.title ? '' : ' empty'}">${esc(p.title || 'Unbenannte Seite')}</span><small>${esc(prev) || '&nbsp;'}</small>${MORE}</div>`;
   }).join('');
@@ -328,6 +333,7 @@ function secMenu(anchor, id) {
   menu(anchor, [
     { label: 'Umbenennen', fn: () => renameSection(id) },
     ...upDown(nb.sections, id),
+    ...secExtra(nb.sections.find(x => x.id === id)),
     { label: 'In anderes Notizbuch verschieben …', fn: () => {
       const items = [{ head: 'Ziel-Notizbuch' }, ...state.notebooks.filter(n => n !== nb).map(n => ({ label: n.name, fn: () => moveSection(id, n.id) }))];
       if (items.length === 1) return toast('Es gibt noch kein anderes Notizbuch.');
@@ -400,20 +406,23 @@ dnd($('#pages'), 'page', () => secOf().pages);
 function blockEl(b) {
   const el = h('<div class="block"><div class="bh" title="Ziehen zum Verschieben">⋯<button class="bx" title="Kasten löschen">×</button></div><div class="bb" contenteditable="true" spellcheck="true"></div><div class="br" title="Breite ändern"></div></div>');
   el.dataset.id = b.id; el.style.left = b.x + 'px'; el.style.top = b.y + 'px'; el.style.width = b.w + 'px';
-  $('.bb', el).innerHTML = b.html; return el;
+  $('.bb', el).innerHTML = b.html; decorate(el); return el;
 }
 const blockData = el => pageOf().blocks.find(b => b.id === el.dataset.id);
 const isEmpty = bb => !bb.textContent.trim() && !bb.querySelector('img,table,hr');
 function render() { renderNav(); renderPage(); }
 function renderPage() {
+  pageLeaving();
   ensure(); const p = pageOf(); state.ui.page = p.id;
+  const locked = isLocked(secOf()); document.body.classList.toggle('locked', locked);
+  $$('.block', canvas).forEach(e => e.remove());
+  if (locked) { titleEl.value = ''; document.title = 'Notizwerk'; ink.replaceChildren(); $('#backlinks').innerHTML = ''; pageShown(); return; }
   p.blocks = p.blocks.filter(b => !htmlEmpty(b.html));
   titleEl.value = p.title; document.title = (p.title || 'Unbenannte Seite') + ' – Notizwerk';
   canvas.dataset.paper = p.paper || 'blank';
-  $$('.block', canvas).forEach(e => e.remove());
   for (const b of p.blocks) canvas.append(blockEl(b));
   refreshLinks(); renderInk(); fitCanvas(); renderMeta(); renderBacklinks();
-  canvas.classList.toggle('study', study); scroller.scrollTo(0, 0);
+  canvas.classList.toggle('study', study); scroller.scrollTo(0, 0); pageShown();
 }
 function renderMeta() {
   const p = pageOf(), t = pageText(p), words = t ? t.split(/\s+/).length : 0;
@@ -425,7 +434,7 @@ function refreshLinks() {
 }
 function renderBacklinks() {
   const p = pageOf(), needle = `data-page="${p.id}"`, hits = [];
-  for (const x of allPages()) if (x.page !== p && x.page.blocks.some(b => b.html.includes(needle))) hits.push(x.page);
+  for (const x of allPages()) if (x.page !== p && !isLocked(x.sec) && x.page.blocks.some(b => b.html.includes(needle))) hits.push(x.page);
   $('#backlinks').innerHTML = hits.length ? 'Verweise auf diese Seite: ' + hits.map(q => `<a data-go="${q.id}">${esc(q.title || 'Unbenannte Seite')}</a>`).join('') : '';
 }
 $('#backlinks').addEventListener('click', e => { const a = e.target.closest('[data-go]'); if (a) go(a.dataset.go); });
@@ -433,8 +442,25 @@ function fitCanvas() {
   let w = 0, hh = 0;
   for (const el of $$('.block', canvas)) { w = Math.max(w, el.offsetLeft + el.offsetWidth); hh = Math.max(hh, el.offsetTop + el.offsetHeight); }
   for (const s of pageOf().strokes) for (let i = 0; i < s.p.length; i += 2) { if (s.p[i] > w) w = s.p[i]; if (s.p[i + 1] > hh) hh = s.p[i + 1]; }
-  canvas.style.width = (w + 300) + 'px'; canvas.style.height = (hh + 500) + 'px';
+  w = Math.max(w + 300, Math.ceil(scroller.clientWidth / Z)); hh = Math.max(hh + 500, Math.ceil(innerHeight * .7 / Z));
+  canvas.style.width = w + 'px'; canvas.style.height = hh + 'px';
+  zoombox.style.width = Math.ceil(w * Z) + 'px'; zoombox.style.height = Math.ceil(hh * Z) + 'px';
 }
+// Zoom: hält den Punkt unter (cx, cy) fest
+function setZoom(z, cx, cy) {
+  z = Math.max(.4, Math.min(4, z)); if (Math.abs(z - Z) < .004) return;
+  const sr = scroller.getBoundingClientRect(), r = canvas.getBoundingClientRect();
+  if (cx == null) { cx = sr.left + sr.width / 2; cy = sr.top + sr.height / 2; }
+  const px = (cx - r.left) / Z, py = (cy - r.top) / Z;
+  Z = z; canvas.style.transform = z === 1 ? '' : `scale(${z})`; fitCanvas();
+  const n = canvas.getBoundingClientRect();
+  scroller.scrollLeft += n.left + px * z - cx; scroller.scrollTop += n.top + py * z - cy;
+  $('#zoomLbl').textContent = Math.round(z * 100) + ' %';
+}
+scroller.addEventListener('wheel', e => { if (!e.ctrlKey && !e.metaKey) return; e.preventDefault(); setZoom(Z * Math.exp(-e.deltaY / 200), e.clientX, e.clientY); }, { passive: false });
+addEventListener('resize', () => state && fitCanvas());
+// linke obere Ecke des sichtbaren Bereichs in Seiten-Koordinaten
+function viewPos() { const r = canvas.getBoundingClientRect(), sr = scroller.getBoundingClientRect(); return [Math.max(0, (sr.left - r.left) / Z) + 48, Math.max(20, (sr.top - r.top) / Z + 40)]; }
 titleEl.addEventListener('input', () => { const p = pageOf(); p.title = titleEl.value; document.title = (p.title || 'Unbenannte Seite') + ' – Notizwerk'; touch(p); });
 titleEl.addEventListener('keydown', e => {
   if (e.key !== 'Enter') return; e.preventDefault();
@@ -453,14 +479,14 @@ function removeBlock(el, withUndo) {
 }
 function syncBlock(bb) {
   const el = bb.closest('.block'), b = el && blockData(el); if (!b) return;
-  b.html = bb.innerHTML.replace(/cloze revealed/g, 'cloze'); touch(pageOf()); fitCanvas();
+  b.html = htmlOf(bb); touch(pageOf()); fitCanvas();
 }
 function activeBB() {
   const s = getSelection(); if (!s.rangeCount || !s.anchorNode) return null;
   const n = s.anchorNode.nodeType === 1 ? s.anchorNode : s.anchorNode.parentElement; return n?.closest('.bb') || null;
 }
 const selEl = () => { const n = getSelection().anchorNode; return n ? (n.nodeType === 1 ? n : n.parentElement) : null; };
-const pt = e => { const r = canvas.getBoundingClientRect(); return [Math.round((e.clientX - r.left) * 10) / 10, Math.round((e.clientY - r.top) * 10) / 10]; };
+const pt = e => { const r = canvas.getBoundingClientRect(); return [Math.round((e.clientX - r.left) / Z * 10) / 10, Math.round((e.clientY - r.top) / Z * 10) / 10]; };
 
 // Klick ins Leere → neuer Textkasten
 canvas.addEventListener('mousedown', e => {
@@ -479,8 +505,8 @@ canvas.addEventListener('pointerdown', e => {
   const sx = e.clientX, sy = e.clientY, ox = b.x, oy = b.y, ow = b.w; let moved = false;
   const mv = ev => {
     moved = true;
-    if (bh) { b.x = Math.max(0, ox + ev.clientX - sx); b.y = Math.max(0, oy + ev.clientY - sy); el.style.left = b.x + 'px'; el.style.top = b.y + 'px'; }
-    else { b.w = Math.max(140, ow + ev.clientX - sx); el.style.width = b.w + 'px'; }
+    if (bh) { b.x = Math.max(0, Math.round(ox + (ev.clientX - sx) / Z)); b.y = Math.max(0, Math.round(oy + (ev.clientY - sy) / Z)); el.style.left = b.x + 'px'; el.style.top = b.y + 'px'; }
+    else { b.w = Math.max(140, Math.round(ow + (ev.clientX - sx) / Z)); el.style.width = b.w + 'px'; }
   };
   const up = () => { removeEventListener('pointermove', mv); removeEventListener('pointerup', up); if (moved) { touch(pageOf()); fitCanvas(); } };
   addEventListener('pointermove', mv); addEventListener('pointerup', up);
@@ -561,7 +587,7 @@ async function insertImage(file, pos) {
   const bb = !pos && activeBB(), range = bb && getSelection().getRangeAt(0).cloneRange();
   let url; try { url = await fileToDataURL(file); } catch { return toast('Bild konnte nicht gelesen werden.'); }
   if (bb && bb.isConnected) { bb.focus(); const s = getSelection(); s.removeAllRanges(); s.addRange(range); exec('insertHTML', `<img src="${url}">`); syncBlock(bb); return; }
-  const [x, y] = pos || [scroller.scrollLeft + 48, Math.max(20, scroller.scrollTop - canvas.offsetTop + 40)];
+  const [x, y] = pos || viewPos();
   const el = newBlock(x, y, `<div><img src="${url}"></div><div><br></div>`, 420);
   const im = $('img', el); const fin = () => fitCanvas(); im.complete ? fin() : im.onload = fin; touch(pageOf());
 }
@@ -573,10 +599,13 @@ canvas.addEventListener('drop', e => {
 });
 
 // ---------- Zeichnen ----------
-const r2 = v => Math.round(v * 100) / 100;
-function pathD(p) {
+const SHAPES = { line: 'Linie', arrow: 'Pfeil', rect: 'Rechteck', ellipse: 'Ellipse' };
+const SVGNS = 'http://www.w3.org/2000/svg';
+const r1 = v => Math.round(v * 10) / 10, r2 = v => Math.round(v * 100) / 100;
+function pathD(p, poly) {
   if (p.length === 2) return `M${p[0]} ${p[1]}l.01 0`;
   let d = `M${p[0]} ${p[1]}`;
+  if (poly) { for (let i = 2; i < p.length; i += 2) d += ` L${p[i]} ${p[i + 1]}`; return d; }
   for (let i = 2; i < p.length - 2; i += 2) d += ` Q${p[i]} ${p[i + 1]} ${r2((p[i] + p[i + 2]) / 2)} ${r2((p[i + 1] + p[i + 3]) / 2)}`;
   return d + ` L${p[p.length - 2]} ${p[p.length - 1]}`;
 }
@@ -591,16 +620,18 @@ function segD(p, i) {
   const bx = i < n - 1 ? r2((x + p[2 * i + 2]) / 2) : x, by = i < n - 1 ? r2((y + p[2 * i + 3]) / 2) : y;
   return `M${ax} ${ay}Q${x} ${y} ${bx} ${by}`;
 }
+// Strich: { c Farbe, w Stärke, o Deckkraft, p [x,y,…], pr Druck je Punkt, k:'poly' = gerade Kanten (Formen) }
+// Striche werden nie verändert, sondern ersetzt – so bleibt „Rückgängig“ billig.
 function strokeEl(s) {
   if (s.pr) {
-    const g = document.createElementNS('http://www.w3.org/2000/svg', 'g'), ds = [];
+    const g = document.createElementNS(SVGNS, 'g'), ds = [];
     for (let i = 0; i < s.pr.length; i++) { const l = prLv(s.pr[i]); ds[l] = (ds[l] || '') + segD(s.p, i); }
     g.setAttribute('stroke', s.c === 'auto' ? 'currentColor' : s.c);
-    ds.forEach((d, l) => { const el = document.createElementNS('http://www.w3.org/2000/svg', 'path'); el.setAttribute('d', d); el.setAttribute('stroke-width', lvW(s.w, l)); g.append(el); });
+    ds.forEach((d, l) => { const el = document.createElementNS(SVGNS, 'path'); el.setAttribute('d', d); el.setAttribute('stroke-width', lvW(s.w, l)); g.append(el); });
     return g;
   }
-  const el = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-  el.setAttribute('d', pathD(s.p)); el.setAttribute('stroke', s.c === 'auto' ? 'currentColor' : s.c); el.setAttribute('stroke-width', s.w); if (s.o) el.setAttribute('stroke-opacity', s.o);
+  const el = document.createElementNS(SVGNS, 'path');
+  el.setAttribute('d', pathD(s.p, s.k === 'poly')); el.setAttribute('stroke', s.c === 'auto' ? 'currentColor' : s.c); el.setAttribute('stroke-width', s.w); if (s.o) el.setAttribute('stroke-opacity', s.o);
   return el;
 }
 function renderInk() { ink.replaceChildren(...pageOf().strokes.map(strokeEl)); }
@@ -624,42 +655,135 @@ function thin(p, eps = .2, gap = 3) {
   }
   return out;
 }
-function eraseAt([x, y]) {
-  const p = pageOf(); let hit = false;
-  p.strokes = p.strokes.filter(s => {
-    const r = 7 + s.w / 2, q = s.p;
-    if (q.length === 2) { if (Math.hypot(x - q[0], y - q[1]) < r) { hit = true; return false; } return true; }
-    for (let i = 0; i < q.length - 2; i += 2) if (segDist(x, y, q[i], q[i + 1], q[i + 2], q[i + 3]) < r) { hit = true; return false; }
-    return true;
-  });
-  if (hit) { renderInk(); touch(p); }
+function thinStroke(s) {
+  const ix = s.k === 'poly' ? thin(s.p, .05, 1e9) : thin(s.p), out = { ...s, p: [] };
+  for (const i of ix) out.p.push(s.p[2 * i], s.p[2 * i + 1]);
+  if (s.pr) out.pr = ix.map(i => s.pr[i]);
+  return out;
 }
+function near(s, x, y, r) {
+  const q = s.p; if (q.length === 2) return Math.hypot(x - q[0], y - q[1]) < r;
+  for (let i = 0; i < q.length - 2; i += 2) if (segDist(x, y, q[i], q[i + 1], q[i + 2], q[i + 3]) < r) return true;
+  return false;
+}
+function eraseAt([x, y]) {
+  const p = pageOf(), part = state.ui.pen.erase === 'part', out = []; let hit = false;
+  for (const s of p.strokes) {
+    const r = 7 + s.w / 2;
+    if (!near(s, x, y, r)) { out.push(s); continue; }
+    hit = true; if (!part) continue;
+    // Teilradierer: Strich fein abtasten, Punkte unter dem Radierer entfernen, Rest in Stücken behalten
+    const q = s.p, d = [q[0], q[1]], dp = s.pr && [s.pr[0]];
+    for (let i = 2; i < q.length; i += 2) {
+      const ax = q[i - 2], ay = q[i - 1], n = Math.max(1, Math.ceil(Math.hypot(q[i] - ax, q[i + 1] - ay) / 2));
+      for (let k = 1; k <= n; k++) { const t = k / n; d.push(r1(ax + (q[i] - ax) * t), r1(ay + (q[i + 1] - ay) * t)); if (dp) dp.push(r2(s.pr[i / 2 - 1] + (s.pr[i / 2] - s.pr[i / 2 - 1]) * t)); }
+    }
+    let run = null; const flush = () => { if (run && run.p.length >= 4) out.push(thinStroke(run)); run = null; };
+    for (let i = 0; i < d.length; i += 2) {
+      if (Math.hypot(d[i] - x, d[i + 1] - y) < r) { flush(); continue; }
+      if (!run) { run = { ...s, p: [] }; if (dp) run.pr = []; }
+      run.p.push(d[i], d[i + 1]); if (dp) run.pr.push(dp[i / 2]);
+    }
+    flush();
+  }
+  if (hit) { p.strokes = out; setSel(null); renderInk(); touch(p); }
+}
+function shapePts(kind, x0, y0, x, y, w) {
+  if (kind === 'line' || kind === 'arrow') {
+    const len = Math.hypot(x - x0, y - y0), st = Math.PI / 12; let a = Math.atan2(y - y0, x - x0); const sa = Math.round(a / st) * st;
+    if (Math.abs(a - sa) < .06) { a = sa; x = r1(x0 + len * Math.cos(a)); y = r1(y0 + len * Math.sin(a)); } // rastet bei 0°, 15°, 30° … ein
+    if (kind === 'line') return [x0, y0, x, y];
+    const hd = Math.min(len * .5, 9 + w * 2.5), pt = d => [r1(x - hd * Math.cos(a + d)), r1(y - hd * Math.sin(a + d))];
+    return [x0, y0, x, y, ...pt(-.45), x, y, ...pt(.45)];
+  }
+  if (kind === 'rect') return [x0, y0, x, y0, x, y, x0, y, x0, y0];
+  const cx = (x0 + x) / 2, cy = (y0 + y) / 2, rx = Math.abs(x - x0) / 2, ry = Math.abs(y - y0) / 2, out = [];
+  for (let i = 0; i <= 48; i++) out.push(r1(cx + rx * Math.cos(i * Math.PI / 24)), r1(cy + ry * Math.sin(i * Math.PI / 24)));
+  return out;
+}
+
+// Lasso: Auswahl von Strichen – verschieben, vergrößern, färben, kopieren, löschen
+let sel = null;
+const selbox = h('<div id="selbox" hidden><div class="selbar"></div><i class="selh" title="Größe ändern"></i></div>'); canvas.append(selbox);
+function setSel(list) {
+  sel = list && list.length ? { list } : null; selbox.hidden = !sel; if (!sel) return;
+  let a = 1e9, b = 1e9, c = -1e9, d = -1e9;
+  for (const s of list) { const m = s.w / 2 + 6; for (let i = 0; i < s.p.length; i += 2) { a = Math.min(a, s.p[i] - m); b = Math.min(b, s.p[i + 1] - m); c = Math.max(c, s.p[i] + m); d = Math.max(d, s.p[i + 1] + m); } }
+  sel.box = { x: a, y: b, w: c - a, h: d - b };
+  Object.assign(selbox.style, { left: a + 'px', top: b + 'px', width: c - a + 'px', height: d - b + 'px' });
+}
+function selReplace(fn) {
+  const p = pageOf(), map = new Map(sel.list.map(s => [s, fn(s)]));
+  p.strokes = p.strokes.map(s => map.get(s) || s); renderInk(); setSel([...map.values()]); touch(p); fitCanvas();
+}
+function selDelete() { const p = pageOf(), gone = new Set(sel.list); p.strokes = p.strokes.filter(s => !gone.has(s)); setSel(null); renderInk(); touch(p); }
+function selCopy() { const p = pageOf(), c = sel.list.map(s => ({ ...s, p: s.p.map(v => v + 24) })); p.strokes = [...p.strokes, ...c]; renderInk(); setSel(c); touch(p); fitCanvas(); }
+{
+  const bar = $('.selbar', selbox);
+  for (const c of INK) { const b = h('<button class="sw" title="Farbe ändern"></button>'); b.style.background = c === 'auto' ? 'var(--fg)' : c; b.onclick = () => selReplace(s => ({ ...s, c })); bar.append(b); }
+  const cp = h('<button title="Kopie anlegen">⧉ Kopieren</button>'); cp.onclick = selCopy; bar.append(cp);
+  const del = h('<button title="Auswahl löschen (Entf)">✕ Löschen</button>'); del.onclick = selDelete; bar.append(del);
+}
+selbox.addEventListener('pointerdown', e => {
+  if (!sel || e.target.closest('.selbar')) return;
+  e.preventDefault(); e.stopPropagation(); try { selbox.setPointerCapture(e.pointerId); } catch { }
+  const scale = e.target.classList.contains('selh'), sx = e.clientX, sy = e.clientY, b = sel.box, st = pageOf().strokes;
+  const els = sel.list.map(s => ink.children[st.indexOf(s)]).filter(Boolean); let dx = 0, dy = 0, f = 1;
+  const mv = ev => {
+    dx = Math.max(-b.x, (ev.clientX - sx) / Z); dy = Math.max(-b.y, (ev.clientY - sy) / Z);
+    if (scale) { f = Math.max(.1, Math.max((b.w + dx) / b.w, (b.h + dy) / b.h)); selbox.style.width = b.w * f + 'px'; selbox.style.height = b.h * f + 'px'; }
+    else { selbox.style.left = b.x + dx + 'px'; selbox.style.top = b.y + dy + 'px'; }
+    const t = scale ? `translate(${b.x} ${b.y}) scale(${f}) translate(${-b.x} ${-b.y})` : `translate(${dx} ${dy})`;
+    els.forEach(el => el.setAttribute('transform', t));
+  };
+  const up = () => {
+    for (const t of ['pointermove', 'pointerup', 'pointercancel']) selbox.removeEventListener(t, t === 'pointermove' ? mv : up);
+    if (scale ? f === 1 : !dx && !dy) return;
+    selReplace(s => scale
+      ? { ...s, w: r2(s.w * f), p: s.p.map((v, i) => { const o = i % 2 ? b.y : b.x; return r1(o + (v - o) * f); }) }
+      : { ...s, p: s.p.map((v, i) => r1(v + (i % 2 ? dy : dx))) });
+  };
+  selbox.addEventListener('pointermove', mv); selbox.addEventListener('pointerup', up); selbox.addEventListener('pointercancel', up);
+});
+function finishLasso(q) {
+  let a = 1e9, b = 1e9, c = -1e9, d = -1e9; for (let i = 0; i < q.length; i += 2) { a = Math.min(a, q[i]); c = Math.max(c, q[i]); b = Math.min(b, q[i + 1]); d = Math.max(d, q[i + 1]); }
+  const st = pageOf().strokes;
+  if (c - a < 8 && d - b < 8) { const s = [...st].reverse().find(s => near(s, q[0], q[1], 9 + s.w / 2)); return setSel(s ? [s] : null); } // angetippt
+  const inside = (x, y) => { let n = false; for (let i = 0, j = q.length - 2; i < q.length; j = i, i += 2) if ((q[i + 1] > y) !== (q[j + 1] > y) && x < (q[j] - q[i]) * (y - q[i + 1]) / (q[j + 1] - q[i + 1]) + q[i]) n = !n; return n; };
+  setSel(st.filter(s => { let n = 0; for (let i = 0; i < s.p.length; i += 2) if (inside(s.p[i], s.p[i + 1])) n++; return n >= s.p.length / 2 * .6; }));
+}
+
 // Finger: zeichnen oder scrollen? Sobald ein Stift (Apple Pencil) benutzt wird, scrollt der Finger.
 let fingerPref = null; try { fingerPref = localStorage.getItem('notizwerk:finger'); } catch { }
 const fingerDraws = () => fingerPref !== 'scroll';
 function setFinger(v) { fingerPref = v; try { localStorage.setItem('notizwerk:finger', v); } catch { } renderDrawTools(); }
-// live = laufender Strich/Radierer (ein Zeiger), pan = Finger verschiebt die Seite
-let stroke = null, strokePath = null, erasing = false, live = null, pan = null, penAt = 0;
-const ptIn = (e, r) => [Math.round((e.clientX - r.left) * 10) / 10, Math.round((e.clientY - r.top) * 10) / 10];
+// live = laufender Strich/Radierer/Lasso (ein Zeiger), pan = Finger verschiebt die Seite, pinch = zwei Finger zoomen
+let stroke = null, strokePath = null, live = null, pan = null, pinch = null, penAt = 0;
+const touches = new Map();
+const ptIn = (e, r) => [r1((e.clientX - r.left) / Z), r1((e.clientY - r.top) / Z)];
 const events = e => { const c = e.getCoalescedEvents?.(); return c && c.length ? c : [e]; };
 function drawLive() {
-  if (!live || !stroke) return; live.raf = 0; const q = stroke.p;
+  if (!live) return; live.raf = 0;
+  if (live.kind === 'lasso') return strokePath.setAttribute('d', pathD(live.q, true) + 'Z');
+  if (!stroke) return; const q = stroke.p;
   if (stroke.pr) { const g = strokeEl(stroke); strokePath.replaceWith(g); strokePath = g; return; }
-  strokePath.setAttribute('d', q.length === 2 ? pathD(q) : live.d + ` L${q[q.length - 2]} ${q[q.length - 1]}`);
+  strokePath.setAttribute('d', live.kind === 'shape' || q.length === 2 ? pathD(q, stroke.k === 'poly') : live.d + ` L${q[q.length - 2]} ${q[q.length - 1]}`);
 }
 function beginStroke(e) {
   e.preventDefault(); try { ink.setPointerCapture(e.pointerId); } catch { }
-  const r = canvas.getBoundingClientRect(), p = ptIn(e, r);
-  live = { id: e.pointerId, type: e.pointerType, r, d: `M${p[0]} ${p[1]}`, raf: 0, min: e.pointerType === 'pen' ? .6 : 1 };
-  if (mode === 'erase') { erasing = true; eraseAt(p); return; }
-  const pen = state.ui.pen;
+  const r = canvas.getBoundingClientRect(), p = ptIn(e, r), pen = state.ui.pen;
+  live = { id: e.pointerId, type: e.pointerType, r, raf: 0, min: e.pointerType === 'pen' ? .6 : 1, kind: mode === 'erase' ? 'erase' : mode === 'lasso' ? 'lasso' : mode in SHAPES ? 'shape' : 'draw' };
+  setSel(null);
+  if (live.kind === 'erase') return eraseAt(p);
+  if (live.kind === 'lasso') { live.q = p; strokePath = document.createElementNS(SVGNS, 'path'); strokePath.setAttribute('class', 'lasso'); ink.append(strokePath); return; }
   stroke = mode === 'marker' ? { c: pen.color === 'auto' ? '#f5c400' : pen.color, w: pen.width * 6, o: .35, p } : { c: pen.color, w: pen.width, p };
-  if (mode === 'pen' && e.pointerType === 'pen' && e.pressure > 0) stroke.pr = [r2(e.pressure)];
+  if (live.kind === 'shape') { live.o = p.slice(); if (mode !== 'ellipse') stroke.k = 'poly'; }
+  else { live.d = `M${p[0]} ${p[1]}`; if (mode === 'pen' && e.pointerType === 'pen' && e.pressure > 0) stroke.pr = [r2(e.pressure)]; }
   strokePath = strokeEl(stroke); ink.append(strokePath);
 }
 function dropStroke() {
   if (live) cancelAnimationFrame(live.raf);
-  strokePath?.remove(); stroke = strokePath = live = null; erasing = false;
+  strokePath?.remove(); stroke = strokePath = live = null;
 }
 ink.addEventListener('pointerdown', e => {
   if (mode === 'text' || e.button !== 0) return;
@@ -671,15 +795,26 @@ ink.addEventListener('pointerdown', e => {
   } else if (type === 'touch') {
     e.preventDefault();
     if (live?.type === 'pen' || Date.now() - penAt < 400) return; // Handballen neben dem Stift ignorieren
-    if (!fingerDraws()) {
-      if (!pan && !live) { try { ink.setPointerCapture(e.pointerId); } catch { } pan = { id: e.pointerId, x: e.clientX, y: e.clientY, vx: 0, vy: 0, t: e.timeStamp }; }
-      return;
+    try { ink.setPointerCapture(e.pointerId); } catch { }
+    touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (touches.size === 2) {                                 // zwei Finger: zoomen und verschieben
+      if (live) dropStroke(); pan = null;
+      const [a, b] = [...touches.values()]; pinch = { d: Math.hypot(a.x - b.x, a.y - b.y) || 1, z: Z, cx: (a.x + b.x) / 2, cy: (a.y + b.y) / 2 };
     }
+    if (touches.size > 1) return;
+    if (!fingerDraws()) { if (!live) pan = { id: e.pointerId, x: e.clientX, y: e.clientY, vx: 0, vy: 0, t: e.timeStamp }; return; }
   }
   if (live) return;                                           // nur ein Strich gleichzeitig
   beginStroke(e);
 });
 ink.addEventListener('pointermove', e => {
+  const tc = touches.get(e.pointerId); if (tc) { tc.x = e.clientX; tc.y = e.clientY; }
+  if (pinch) {
+    if (!tc || touches.size < 2) return;
+    const [a, b] = [...touches.values()], cx = (a.x + b.x) / 2, cy = (a.y + b.y) / 2;
+    scroller.scrollLeft -= cx - pinch.cx; scroller.scrollTop -= cy - pinch.cy; pinch.cx = cx; pinch.cy = cy;
+    return setZoom(pinch.z * Math.hypot(a.x - b.x, a.y - b.y) / pinch.d, cx, cy);
+  }
   if (pan && e.pointerId === pan.id) {
     const dx = e.clientX - pan.x, dy = e.clientY - pan.y, dt = Math.max(1, e.timeStamp - pan.t);
     scroller.scrollLeft -= dx; scroller.scrollTop -= dy;
@@ -688,37 +823,42 @@ ink.addEventListener('pointermove', e => {
   }
   if (!live || e.pointerId !== live.id) return;
   if (live.type === 'pen') penAt = Date.now();
-  if (erasing) { for (const ev of events(e)) eraseAt(ptIn(ev, live.r)); return; }
-  const q = stroke.p;
-  for (const ev of events(e)) {
-    const [x, y] = ptIn(ev, live.r), n = q.length, px = q[n - 2], py = q[n - 1];
-    if (Math.hypot(x - px, y - py) < live.min) continue;
-    if (n >= 4) live.d += ` Q${px} ${py} ${r2((px + x) / 2)} ${r2((py + y) / 2)}`;
-    q.push(x, y);
-    if (stroke.pr) { const pr = stroke.pr; pr.push(r2(.6 * pr[pr.length - 1] + .4 * (ev.pressure || pr[pr.length - 1]))); }
+  if (live.kind === 'erase') { for (const ev of events(e)) eraseAt(ptIn(ev, live.r)); return; }
+  if (live.kind === 'shape') { const [x, y] = ptIn(e, live.r); stroke.p = shapePts(mode, live.o[0], live.o[1], x, y, stroke.w); }
+  else {
+    const q = live.kind === 'lasso' ? live.q : stroke.p;
+    for (const ev of events(e)) {
+      const [x, y] = ptIn(ev, live.r), n = q.length, px = q[n - 2], py = q[n - 1];
+      if (Math.hypot(x - px, y - py) < live.min) continue;
+      if (live.kind === 'draw' && n >= 4) live.d += ` Q${px} ${py} ${r2((px + x) / 2)} ${r2((py + y) / 2)}`;
+      q.push(x, y);
+      if (stroke?.pr) { const pr = stroke.pr; pr.push(r2(.6 * pr[pr.length - 1] + .4 * (ev.pressure || pr[pr.length - 1]))); }
+    }
   }
   if (!live.raf) live.raf = requestAnimationFrame(drawLive);
 });
 function endPan(e) {
   const p = pan; pan = null; if (!p || e.type === 'pointercancel' || e.timeStamp - p.t > 60) return;
-  const cl = v => Math.max(-50, Math.min(50, v * 16)); let vx = cl(p.vx), vy = cl(p.vy);                          // Nachlauf wie beim normalen Scrollen
-  const step = () => { if (pan || live || Math.hypot(vx, vy) < .4) return; scroller.scrollLeft -= vx; scroller.scrollTop -= vy; vx *= .94; vy *= .94; requestAnimationFrame(step); };
+  const cl = v => Math.max(-50, Math.min(50, v * 16)); let vx = cl(p.vx), vy = cl(p.vy); // Nachlauf wie beim normalen Scrollen
+  const step = () => { if (pan || live || pinch || Math.hypot(vx, vy) < .4) return; scroller.scrollLeft -= vx; scroller.scrollTop -= vy; vx *= .94; vy *= .94; requestAnimationFrame(step); };
   step();
 }
 const endStroke = e => {
+  if (touches.delete(e.pointerId) && pinch) { if (touches.size < 2) pinch = null; return; }
   if (pan && e.pointerId === pan.id) return endPan(e);
   if (!live || e.pointerId !== live.id) return;
   if (live.type === 'pen') penAt = Date.now();
-  cancelAnimationFrame(live.raf); live = null;
-  if (erasing) { erasing = false; return; }
-  const s = stroke, el = strokePath; stroke = strokePath = null; if (!s) return;
-  const ix = thin(s.p), q = s.p; s.p = []; for (const i of ix) s.p.push(q[2 * i], q[2 * i + 1]);
-  if (s.pr) s.pr = ix.map(i => s.pr[i]);
-  const fin = strokeEl(s); el.replaceWith(fin);
-  const p = pageOf(); p.strokes.push(s); touch(p);
-  let mx = 0, my = 0; for (let i = 0; i < s.p.length; i += 2) { if (s.p[i] > mx) mx = s.p[i]; if (s.p[i + 1] > my) my = s.p[i + 1]; }
-  if (mx + 300 > canvas.offsetWidth) canvas.style.width = (mx + 300) + 'px';
-  if (my + 500 > canvas.offsetHeight) canvas.style.height = (my + 500) + 'px';
+  const { kind, q } = live; cancelAnimationFrame(live.raf); live = null;
+  if (kind === 'erase') return;
+  let s = stroke; const el = strokePath; stroke = strokePath = null;
+  if (kind === 'lasso') { el.remove(); return finishLasso(q); }
+  if (!s) return;
+  let mx = 0, my = 0, nx = 1e9, ny = 1e9; for (let i = 0; i < s.p.length; i += 2) { mx = Math.max(mx, s.p[i]); my = Math.max(my, s.p[i + 1]); nx = Math.min(nx, s.p[i]); ny = Math.min(ny, s.p[i + 1]); }
+  if (kind === 'shape' && mx - nx < 3 && my - ny < 3) return el.remove(); // nur angetippt
+  if (kind === 'draw') s = thinStroke(s);
+  el.replaceWith(strokeEl(s));
+  const p = pageOf(); p.strokes = [...p.strokes, s]; touch(p);
+  if (mx + 300 > canvas.offsetWidth || my + 500 > canvas.offsetHeight) fitCanvas();
 };
 ink.addEventListener('pointerup', endStroke); ink.addEventListener('pointercancel', endStroke);
 // Safari: keine Lupe, kein Markieren, kein Mitscrollen, solange gezeichnet wird
@@ -730,19 +870,22 @@ canvas.addEventListener('pointerdown', e => {
   if (fingerPref === null) setFinger('scroll');
   penAt = Date.now(); beginStroke(e);
 });
-function undoStroke() { const p = pageOf(); if (p.strokes.pop()) { renderInk(); touch(p); } }
 function setMode(m) {
-  mode = m; canvas.classList.toggle('drawing', m !== 'text');
-  $$('#modes button').forEach(b => b.classList.toggle('on', b.dataset.mode === m));
-  $('#drawtools').hidden = m === 'text' || m === 'erase';
+  mode = m; canvas.classList.toggle('drawing', m !== 'text'); setSel(null);
+  $$('#modes button').forEach(b => b.classList.toggle('on', b.dataset.mode === m || (b.dataset.act === 'shapes' && m in SHAPES)));
+  $('#drawtools').hidden = m === 'text'; renderDrawTools();
   if (m !== 'text') { getSelection().removeAllRanges(); document.activeElement?.blur?.(); }
 }
 function renderDrawTools() {
   const pen = state.ui.pen, box = $('#drawtools'); box.innerHTML = '';
-  for (const c of INK) { const b = h(`<button class="sw${pen.color === c ? ' on' : ''}" title="Farbe"></button>`); b.style.background = c === 'auto' ? 'var(--fg)' : c; b.onclick = () => { pen.color = c; renderDrawTools(); save(); }; box.append(b); }
-  box.append(h('<span class="sep"></span>'));
-  for (const w of [1.5, 2.5, 4.5]) { const b = h(`<button class="wbtn${pen.width === w ? ' on' : ''}" title="Strichstärke"><i style="width:${w * 2.4}px;height:${w * 2.4}px"></i></button>`); b.onclick = () => { pen.width = w; renderDrawTools(); save(); }; box.append(b); }
-  const u = h('<button title="Letzten Strich zurücknehmen (Strg/⌘+Z)">↶</button>'); u.onclick = undoStroke; box.append(u);
+  if (mode === 'erase') {
+    for (const [k, label] of [['stroke', 'Ganzer Strich'], ['part', 'Nur ein Stück']]) { const b = h(`<button class="${(pen.erase || 'stroke') === k ? 'on' : ''}">${label}</button>`); b.onclick = () => { pen.erase = k; renderDrawTools(); save(); }; box.append(b); }
+  } else if (mode === 'lasso') box.append(h('<span class="hint">Striche einkreisen oder antippen</span>'));
+  else {
+    for (const c of INK) { const b = h(`<button class="sw${pen.color === c ? ' on' : ''}" title="Farbe"></button>`); b.style.background = c === 'auto' ? 'var(--fg)' : c; b.onclick = () => { pen.color = c; renderDrawTools(); save(); }; box.append(b); }
+    box.append(h('<span class="sep"></span>'));
+    for (const w of [1.5, 2.5, 4.5]) { const b = h(`<button class="wbtn${pen.width === w ? ' on' : ''}" title="Strichstärke"><i style="width:${w * 2.4}px;height:${w * 2.4}px"></i></button>`); b.onclick = () => { pen.width = w; renderDrawTools(); save(); }; box.append(b); }
+  }
   box.append(h('<span class="sep"></span>'));
   const f = h(`<button title="Mit dem Finger zeichnen oder die Seite verschieben">${fingerDraws() ? 'Finger zeichnet' : 'Finger scrollt'}</button>`); f.onclick = () => setFinger(fingerDraws() ? 'scroll' : 'draw'); box.append(f);
 }
@@ -781,6 +924,9 @@ const ACT = {
     $$('#tabs [data-tab]').forEach(x => x.classList.toggle('on', x === b)); $$('.rb').forEach(r => r.hidden = r.dataset.rb !== t);
     if (t === 'draw') { if (mode === 'text') setMode('pen'); } else if (mode !== 'text') setMode('text');
   },
+  shapes: b => menu(b, Object.entries(SHAPES).map(([k, label]) => ({ label, checked: mode === k, fn: () => setMode(k) }))),
+  undo: () => Hist.undo(), redo: () => Hist.redo(),
+  zoomin: () => setZoom(Z * 1.25), zoomout: () => setZoom(Z / 1.25), zoom0: () => setZoom(1),
   newpage: () => newPage(),
   sync: () => Sync.dialog(),
   bold: () => exec('bold'), italic: () => exec('italic'), underline: () => exec('underline'), strike: () => exec('strikeThrough'),
@@ -832,7 +978,7 @@ function palette({ onPick, placeholder, query = '' } = {}) {
     const raw = inp.value.trim(), q = raw.toLowerCase(); items = []; idx = 0;
     if (q.startsWith('#')) {
       const want = q.slice(1);
-      for (const x of allPages()) for (const b of x.page.blocks) {
+      for (const x of allPages()) if (!isLocked(x.sec)) for (const b of x.page.blocks) {
         if (!b.html.includes('data-tag')) continue;
         for (const el of parser.parseFromString(b.html, 'text/html').querySelectorAll('[data-tag]')) {
           const label = TAGS[el.dataset.tag] || el.dataset.tag;
@@ -842,6 +988,7 @@ function palette({ onPick, placeholder, query = '' } = {}) {
     } else {
       const words = q.split(/\s+/).filter(Boolean);
       for (const x of allPages()) {
+        if (isLocked(x.sec)) continue;
         const t = x.page.title || 'Unbenannte Seite', text = pageText(x.page), tl = t.toLowerCase(), cl = text.toLowerCase();
         if (!words.every(w => tl.includes(w) || cl.includes(w))) continue;
         const ci = words.length ? cl.indexOf(words.find(w => cl.includes(w)) ?? '\0') : -1;
@@ -912,7 +1059,7 @@ function md(n) {
     case 'BLOCKQUOTE': return '\n' + kids().trim().split('\n').map(l => '> ' + l).join('\n') + '\n\n';
     case 'PRE': return '\n```\n' + n.textContent + '\n```\n\n';
     case 'TABLE': { const rows = [...n.rows].map(r => '| ' + [...r.cells].map(c => kids(c).trim().replace(/\n/g, ' ')).join(' | ') + ' |'); if (rows.length) rows.splice(1, 0, '|' + ' --- |'.repeat(n.rows[0].cells.length)); return '\n' + rows.join('\n') + '\n\n'; }
-    case 'SPAN': return n.classList.contains('cloze') ? `{{${kids()}}}` : kids();
+    case 'SPAN': return n.classList.contains('math') ? `$${n.dataset.tex || n.textContent}$` : n.classList.contains('cloze') ? `{{${kids()}}}` : kids();
     case 'DIV': case 'P': return (n.dataset.tag ? `**${TAGS[n.dataset.tag]}:** ` : '') + kids() + '\n';
     default: return kids();
   }
@@ -930,7 +1077,7 @@ $('#jsonFile').onchange = async e => {
   const clean = p => p.blocks.forEach(b => { b.html = sanitize(String(b.html || '')); });
   for (const nb of data.notebooks) for (const s of nb.sections) s.pages.forEach(clean);
   data.trash = data.trash.filter(t => t && t.page && Array.isArray(t.page.blocks)); data.trash.forEach(t => clean(t.page));
-  state = data; applyTheme(); renderDrawTools(); render(); save(); toast('Backup geladen');
+  state = data; unlocked.clear(); applyTheme(); renderDrawTools(); render(); save(); Hist.reset(); toast('Backup geladen');
 };
 
 // ---------- Tastatur & Start ----------
@@ -938,17 +1085,20 @@ addEventListener('keydown', e => {
   const mod = e.metaKey || e.ctrlKey, k = e.key.toLowerCase();
   if (mod && k === 'k') { e.preventDefault(); palette(); }
   else if (e.key === 'Escape') { if (menuEl) closeMenu(); else if (overlay.classList.contains('open')) closeOverlay(); else if (mode !== 'text') setMode('text'); }
-  else if (mod && k === 'z' && mode !== 'text') { e.preventDefault(); undoStroke(); }
+  else if (mod && (k === 'z' || k === 'y') && !e.target.closest?.('.bb,input,textarea')) { e.preventDefault(); if (k === 'y' || e.shiftKey) Hist.redo(); else Hist.undo(); }
+  else if ((e.key === 'Delete' || e.key === 'Backspace') && sel && !e.target.closest?.('.bb,input,textarea')) { e.preventDefault(); selDelete(); }
   else if (e.altKey && e.code === 'KeyN') { e.preventDefault(); newPage(); }
 });
 addEventListener('pagehide', () => { if (saveT) flush(); });
 document.addEventListener('visibilitychange', () => { if (document.hidden && saveT) flush(); });
 (async () => {
+  if (document.readyState === 'loading') await new Promise(r => addEventListener('DOMContentLoaded', r)); // erst wenn alle Skripte geladen sind
   state = normalise(await DB.get('state'));
   navigator.storage?.persist?.();
   if (!/Mac|iPhone|iPad/.test(navigator.platform)) $$('kbd').forEach(k => k.textContent = k.textContent.replace('⌘', 'Strg+'));
   if (innerWidth <= 820) document.body.classList.add('nonav');
   applyTheme(); renderDrawTools(); render(); $('#saveState').textContent = 'Gespeichert';
+  handleClip();
   if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(() => { });
   if (typeof Sync !== 'undefined') Sync.start();
 })();
