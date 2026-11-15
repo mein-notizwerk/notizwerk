@@ -578,9 +578,12 @@ async function fileToDataURL(file) {
   const url = await new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result); r.onerror = rej; r.readAsDataURL(file); });
   if (file.size < 350e3 || file.type === 'image/gif') return url;
   const img = new Image(); await new Promise((res, rej) => { img.onload = res; img.onerror = rej; img.src = url; });
-  const k = Math.min(1, 1800 / Math.max(img.width, img.height)), c = document.createElement('canvas');
-  c.width = Math.round(img.width * k); c.height = Math.round(img.height * k); c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
-  return c.toDataURL('image/webp', .88);
+  const k = Math.min(1, 1600 / Math.max(img.width, img.height)), c = document.createElement('canvas'), ctx = c.getContext('2d');
+  c.width = Math.round(img.width * k); c.height = Math.round(img.height * k); ctx.drawImage(img, 0, 0, c.width, c.height);
+  const webp = c.toDataURL('image/webp', .82); if (webp.startsWith('data:image/webp')) return webp;
+  // Safari kann kein WebP schreiben und würde ein riesiges PNG liefern → JPEG auf weißem Grund
+  ctx.globalCompositeOperation = 'destination-over'; ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, c.width, c.height);
+  return c.toDataURL('image/jpeg', .8);
 }
 async function insertImage(file, pos) {
   if (!/^image\/(png|jpe?g|gif|webp)$/.test(file.type)) return toast('Dieses Bildformat wird nicht unterstützt.');
@@ -594,8 +597,9 @@ async function insertImage(file, pos) {
 $('#imgFile').onchange = e => { [...e.target.files].forEach(f => insertImage(f)); e.target.value = ''; };
 canvas.addEventListener('dragover', e => { if ([...e.dataTransfer.types].includes('Files')) e.preventDefault(); });
 canvas.addEventListener('drop', e => {
-  const files = [...e.dataTransfer.files].filter(f => f.type.startsWith('image/')); if (!files.length) return;
+  const all = [...e.dataTransfer.files], files = all.filter(f => f.type.startsWith('image/')), rest = all.filter(f => !f.type.startsWith('image/')); if (!all.length) return;
   e.preventDefault(); const [x, y] = pt(e); files.forEach((f, i) => insertImage(f, [x + i * 24, y + i * 24]));
+  if (rest.length) addFiles(rest); // PDFs und andere Dateien: mit Nachfrage bzw. als Anhang
 });
 
 // ---------- Zeichnen ----------

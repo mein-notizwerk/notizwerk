@@ -195,15 +195,36 @@ const Files = {
 };
 setInterval(() => Files.run(), 60e3); addEventListener('online', () => Files.run()); setTimeout(() => Files.run(), 4000);
 const attHtml = (id, label) => `<span class="att" data-att="${id}" contenteditable="false">${esc(label)}</span>&nbsp;`;
-$('#anyFile').onchange = async e => {
-  const files = [...e.target.files], put = placer(); e.target.value = '';
+function pick(title, opts) { // Auswahl-Dialog; liefert den Schlüssel der gewählten Möglichkeit oder null
+  return new Promise(res => {
+    let done = false; const fin = v => { if (done) return; done = true; res(v); closeOverlay(); };
+    const box = h(`<div class="modal"><h3>${esc(title)}</h3>${opts.map(o => `<button class="choice" data-k="${o.k}"><b>${esc(o.label)}</b><small>${esc(o.text)}</small></button>`).join('')}<div class="row"><button class="ghost">Abbrechen</button></div></div>`);
+    box.onclick = e => { const b = e.target.closest('button'); if (b) fin(b.dataset.k || null); };
+    openOverlay(box, () => fin(null));
+  });
+}
+// Fragt bei PDFs und Fotos, ob der Inhalt sichtbar auf die Seite soll oder nur ein Link zur Datei.
+async function addFiles(files, put = placer()) {
+  if (lockedNow()) return;
   for (const f of files) {
     if (f.size > 300e6) { toast(`„${f.name}“ ist zu groß (höchstens 300 MB).`); continue; }
+    const head = `„${f.name}“ (${fmtSize(f.size)}) einfügen`, local = f.size > Files.MAX ? ' Über 50 MB: bleibt nur auf diesem Gerät.' : '';
+    let how = 'att';
+    if (f.type === 'application/pdf' || /\.pdf$/i.test(f.name)) how = await pick(head, [
+      { k: 'print', label: 'Als Ausdruck', text: 'Jede Seite liegt als Bild auf der Notizseite. Du kannst darauf schreiben, der Text ist durchsuchbar. Macht die Notiz größer: etwa 20–100 KB pro PDF-Seite.' },
+      { k: 'att', label: 'Nur als Link', text: 'In der Notiz steht ein kleiner Eintrag, das PDF öffnet sich beim Antippen. Die Notiz bleibt klein und schnell.' + local }]);
+    else if (/^image\/(png|jpe?g|gif|webp)$/.test(f.type)) how = await pick(head, [
+      { k: 'img', label: 'Als Bild anzeigen', text: 'Das Foto ist direkt in der Notiz sichtbar. Es wird dafür verkleinert, meist auf 0,1–0,5 MB – das spart am meisten Platz.' },
+      { k: 'att', label: 'Nur als Link', text: 'In der Notiz steht ein kleiner Eintrag, das Foto bleibt in Originalgröße erhalten und öffnet sich beim Antippen.' + local }]);
+    if (!how) continue;
+    if (how === 'print') { await insertPdf(f); continue; }
+    if (how === 'img') { await insertImage(f); continue; }
     const id = uid();
     try { await DB.set('att:' + id, { name: f.name, type: f.type, size: f.size, blob: f }); } catch { toast('Die Datei konnte nicht gespeichert werden.'); continue; }
     put(attHtml(id, `📎 ${f.name} (${fmtSize(f.size)})`)); Files.queue(id, f.size);
   }
-};
+}
+$('#anyFile').onchange = e => { const files = [...e.target.files], put = placer(); e.target.value = ''; addFiles(files, put); };
 let rec = null;
 async function toggleRecording(b) {
   if (rec) return rec.mr.stop();

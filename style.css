@@ -180,6 +180,9 @@ body.nonav #nav{display:none}
 .toast button:hover{background:none}
 
 /* Erweiterungen */
+.modal .choice{display:block;text-align:left;white-space:normal;border:1px solid var(--line);border-radius:10px;padding:10px 12px}
+.modal .choice:hover{border-color:var(--acc);background:var(--acc-soft)}
+.modal .choice small{display:block;color:var(--mut);margin-top:3px;line-height:1.4}
 .sec.lvl1{margin-left:14px}
 .pglock{padding:14px 10px;color:var(--mut)}
 #lockscreen{display:none;padding:60px 48px;color:var(--mut);font-size:16px}
