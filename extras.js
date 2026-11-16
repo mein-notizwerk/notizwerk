@@ -243,7 +243,9 @@ const Drive = (() => {
     if (!cfg().clientId) { el.innerHTML = '<p style="font-size:12px"><b>Google Drive:</b> noch nicht eingerichtet. Dateien liegen im Supabase-Speicher.</p>'; return; }
     el.innerHTML = on()
       ? '<p style="font-size:12px"><b>Google Drive: verbunden.</b> Dateien, Fotos und PDFs liegen im Drive-Ordner „Notizwerk“. <button type="button" class="ghost" data-g="off" style="padding:2px 8px">Trennen</button></p>'
+        + `<p style="font-size:12px"><b>Bildqualität in Drive:</b> <select data-q style="font:inherit;padding:2px 4px;border-radius:6px;border:1px solid var(--line);background:var(--bg);color:inherit">${Object.entries(IMGQ).map(([k, q]) => `<option value="${k}"${k === imgQ() ? ' selected' : ''}>${q.label}</option>`).join('')}</select><br>Gilt für neu eingefügte Bilder auf diesem Gerät.</p>`
       : '<p style="font-size:12px"><b>Google Drive: nicht verbunden.</b> Verbinde es einmal – das gilt dann für alle deine Geräte. <button type="button" class="ghost" data-g="on" style="padding:2px 8px">Verbinden</button></p>';
+    const sel = $('[data-q]', el); if (sel) sel.onchange = () => { state.ui.imgq = sel.value; save(); toast('Bildqualität: ' + IMGQ[sel.value].label); };
     el.onclick = async e => {
       const b = e.target.closest('[data-g]'); if (!b) return;
       if (b.dataset.g === 'on') return connect();
@@ -292,12 +294,29 @@ canvas.addEventListener('click', async e => { // fehlendes Bild antippen = noch 
   if (!await showImg(i)) toast(navigator.onLine ? 'Dieses Bild liegt noch nicht in der Ablage – es wird vom anderen Gerät noch hochgeladen.' : 'Ohne Internet kann das Bild nicht geladen werden.');
 });
 // Neues Foto: mit Google Drive wird es ausgelagert, sonst steht es wie bisher direkt in der Notiz.
-// Mit Drive wird das Original in voller Qualität abgelegt (orig = die eingefügte Datei), ohne Drive die verkleinerte Fassung in der Notiz.
+// Bildqualität für Drive (pro Gerät). px = längste Seite, q = Kompression; Original = Datei unverändert.
+const IMGQ = {
+  orig: { label: 'Original (volle Qualität)', short: 'in Originalqualität' },
+  high: { label: 'Hoch – 2400 px, ca. 0,5–1 MB', short: 'in hoher Qualität (2400 px)', px: 2400, q: .85 },
+  mid:  { label: 'Mittel – 1600 px, ca. 0,2–0,5 MB', short: 'in mittlerer Qualität (1600 px)', px: 1600, q: .8 },
+  low:  { label: 'Klein – 1000 px, ca. 0,1 MB', short: 'in kleiner Qualität (1000 px)', px: 1000, q: .75 }
+};
+const imgQ = () => IMGQ[state.ui.imgq] ? state.ui.imgq : 'orig';
+async function shrink(file, px, q) { // längste Seite auf px, WebP – Safari kann das nicht schreiben, dann JPEG
+  const url = URL.createObjectURL(file), im = new Image(); im.src = url; await im.decode(); URL.revokeObjectURL(url);
+  const k = Math.min(1, px / Math.max(im.width, im.height)), c = document.createElement('canvas'), x = c.getContext('2d');
+  c.width = Math.round(im.width * k); c.height = Math.round(im.height * k); x.drawImage(im, 0, 0, c.width, c.height);
+  let b = await new Promise(r => c.toBlob(r, 'image/webp', q));
+  if (!b || b.type !== 'image/webp') { x.globalCompositeOperation = 'destination-over'; x.fillStyle = '#fff'; x.fillRect(0, 0, c.width, c.height); b = await new Promise(r => c.toBlob(r, 'image/jpeg', q)); }
+  c.width = c.height = 0; return b.size < file.size ? b : file; // nie größer als das Original
+}
+// Mit Drive wird das Bild in der gewählten Qualität abgelegt (orig = die eingefügte Datei), ohne Drive die verkleinerte Fassung in der Notiz.
 async function imgHtml(dataUrl, orig) {
   if (!Drive.on()) return `<img src="${dataUrl}">`;
-  const keep = orig && /^image\/(png|jpe?g|gif|webp)$/.test(orig.type);
-  const blob = keep ? orig : await (await fetch(dataUrl)).blob(), im = new Image(); im.src = dataUrl; await im.decode();
-  const name = keep && orig.name ? orig.name : 'Bild ' + fmtDate(Date.now()).replace(/[.:]/g, '-') + '.' + (blob.type.split('/')[1] || 'jpg');
+  const keep = orig && /^image\/(png|jpe?g|gif|webp)$/.test(orig.type), Q = IMGQ[imgQ()];
+  const blob = keep ? (Q.px && orig.type !== 'image/gif' ? await shrink(orig, Q.px, Q.q) : orig) : await (await fetch(dataUrl)).blob(), im = new Image(); im.src = dataUrl; await im.decode();
+  const base = keep && orig.name ? orig.name.replace(/\.[^.]+$/, '') : 'Bild ' + fmtDate(Date.now()).replace(/[.:]/g, '-');
+  const name = base + '.' + ({ 'image/jpeg': 'jpg', 'image/webp': 'webp', 'image/png': 'png', 'image/gif': 'gif' }[blob.type] || 'jpg');
   const id = uid(); await DB.set('att:' + id, { name, type: blob.type, size: blob.size, blob });
   Files.queue(id, blob.size);
   return `<img data-att="${id}" data-ar="${r2(im.width / im.height)}">`;
@@ -352,7 +371,7 @@ async function addFiles(files, put = placer()) {
       { k: 'att', label: 'Nur als Link', text: 'In der Notiz steht ein kleiner Eintrag, das PDF öffnet sich beim Antippen.' + where + local }]);
     else if (/^image\/(png|jpe?g|gif|webp)$/.test(f.type)) how = await pick(head, [
       { k: 'img', label: 'Als Bild anzeigen', text: drive
-        ? 'Das Bild ist wie ein Ausdruck auf der Seite zu sehen, du kannst darauf schreiben. Das Original wird in voller Qualität in deinem Google Drive (Ordner „Notizwerk“) gespeichert.'
+        ? `Das Bild ist wie ein Ausdruck auf der Seite zu sehen, du kannst darauf schreiben. Es wird ${IMGQ[imgQ()].short} in deinem Google Drive (Ordner „Notizwerk“) gespeichert – ändern unter ☁ Synchron.`
         : 'Das Bild ist wie ein Ausdruck auf der Seite zu sehen, du kannst darauf schreiben. Es wird dafür verkleinert (meist 0,1–0,5 MB) und mit der Notiz gespeichert.' },
       { k: 'att', label: 'Nur als Link', text: 'In der Notiz steht nur ein kleiner Eintrag, das Bild öffnet sich beim Antippen in Originalgröße.' + where + local }]);
     if (!how) continue;
