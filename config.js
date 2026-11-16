@@ -9,4 +9,4 @@ window.NOTIZWERK_SUPABASE = {
 
 // Google Drive als Ablage für Dateien, Fotos und PDFs (siehe supabase/functions/gdrive).
 // clientId: OAuth-Client-ID aus der Google Cloud Console – sie ist öffentlich, das Client-Secret liegt nur in Supabase.
-window.NOTIZWERK_GOOGLE = { clientId: '' };
+window.NOTIZWERK_GOOGLE = { clientId: '889987677880-imo0gv63f4e0cs067li04aidq60gg3qk.apps.googleusercontent.com' };
