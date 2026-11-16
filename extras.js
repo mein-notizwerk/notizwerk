@@ -16,8 +16,9 @@ const lockedNow = () => document.body.classList.contains('locked') && (toast('Di
 // Jeder Schritt hält die Struktur (Notizbücher → Abschnitte → Seiten, flach kopiert) und den Inhalt der gerade gezeigten Seite.
 const Hist = (() => {
   let stack = [], idx = -1, t = null, busy = false, last = null;
-  const snapPage = p => ({ ref: p, id: p.id, title: p.title, paper: p.paper, blocks: p.blocks.map(b => ({ ...b })), strokes: p.strokes.slice() });
+  const snapPage = p => ({ ref: p, id: p.id, title: p.title, paper: p.paper, blocks: p.blocks.map(b => ({ ...b })), strokes: p.strokes.slice(), covers: (p.covers || []).slice() });
   const samePage = (a, b) => a.ref === b.ref && a.title === b.title && a.paper === b.paper && a.blocks.length === b.blocks.length && a.strokes.length === b.strokes.length
+    && a.covers.length === b.covers.length && a.covers.every((c, i) => c === b.covers[i])
     && a.strokes.every((s, i) => s === b.strokes[i]) && a.blocks.every((x, i) => { const y = b.blocks[i]; return x.id === y.id && x.x === y.x && x.y === y.y && x.w === y.w && x.html === y.html; });
   function take(page) {
     const struct = state.notebooks.map(n => ({ n, name: n.name, color: n.color, secs: n.sections.map(s => ({ s, name: s.name, color: s.color, lvl: s.lvl || 0, lock: s.lock || '', pages: s.pages.slice(), lvls: s.pages.map(p => p.lvl || 0) })) }));
@@ -42,7 +43,7 @@ const Hist = (() => {
     });
     state.trash = s.trash.slice();
     const p = s.page.ref;
-    if (!samePage(snapPage(p), s.page)) Object.assign(p, { title: s.page.title, paper: s.page.paper, blocks: s.page.blocks.map(b => ({ ...b })), strokes: s.page.strokes.slice(), updated: Date.now() });
+    if (!samePage(snapPage(p), s.page)) Object.assign(p, { title: s.page.title, paper: s.page.paper, blocks: s.page.blocks.map(b => ({ ...b })), strokes: s.page.strokes.slice(), covers: s.page.covers.slice(), updated: Date.now() });
     Object.assign(state.ui, s.ui);
     last = null; render(); if (stay) scroller.scrollTo(sl, st); save();
     busy = false; last = pageOf();
@@ -72,7 +73,7 @@ const Versions = {
       let list = (await DB.get('ver:' + id)) || [];
       if (list.length && now - list[list.length - 1].at < 10 * 60e3) return;
       const size = snap.blocks.reduce((n, b) => n + b.html.length, 0) + snap.strokes.reduce((n, s) => n + s.p.length * 6, 0);
-      list.push({ at: now, title: snap.title, paper: snap.paper, blocks: snap.blocks, strokes: snap.strokes });
+      list.push({ at: now, title: snap.title, paper: snap.paper, blocks: snap.blocks, strokes: snap.strokes, covers: snap.covers });
       list = list.slice(size > 2e6 ? -3 : -15);     // große Seiten (PDF-Folien): nur wenige Stände
       await DB.set('ver:' + id, list);
     } catch (e) { console.warn('Version nicht gespeichert', e); }
@@ -89,7 +90,7 @@ const Versions = {
       const b = e.target.closest('button'); if (!b) return;
       const v = b.dataset.i && list[+b.dataset.i]; closeOverlay(); if (!v) return;
       Hist.flush();
-      Object.assign(p, { title: v.title || '', paper: v.paper || 'blank', blocks: v.blocks.map(x => ({ ...x, html: sanitize(String(x.html || '')) })), strokes: v.strokes.slice() });
+      Object.assign(p, { title: v.title || '', paper: v.paper || 'blank', blocks: v.blocks.map(x => ({ ...x, html: sanitize(String(x.html || '')) })), strokes: v.strokes.slice(), covers: (v.covers || []).slice() });
       touch(p); render(); toast('Version wiederhergestellt', 'Rückgängig', () => Hist.undo());
     });
     openOverlay(box);
@@ -486,6 +487,7 @@ async function unlockSection(s) {
 function secExtra(s) {
   const secs = nbOf().sections, i = secs.indexOf(s), setLvl = v => { s.lvl = v; renderNav(); save(); };
   return [
+    { label: 'Abschnitt abfragen', fn: () => { if (s !== secOf()) selectSection(s.id); quiz(s); } },
     !s.lvl && i > 0 && { label: 'Zum Unterabschnitt machen →', fn: () => setLvl(1) },
     !!s.lvl && { label: '← Höher stufen', fn: () => setLvl(0) },
     !s.lock && { label: 'Mit Passwort sperren …', fn: async () => {
@@ -502,8 +504,102 @@ function secExtra(s) {
 }
 $('#unlockBtn').onclick = () => unlockSection(secOf());
 
+// ---------- Abschnitts-Abfrage ----------
+// Jede Lücke (getippter Text) und jede Abdeckung (Handschrift, Folien) wird zu einer Frage.
+function quizItems(sec) {
+  const out = [];
+  for (const page of sec.pages) {
+    const list = [];
+    for (const b of page.blocks) {
+      if (!b.html.includes('cloze')) continue;
+      const body = parser.parseFromString(b.html, 'text/html').body;
+      for (const c of $$('.cloze', body)) {
+        const root = c.parentElement.closest('li,div,p,h1,h2,h3,td,th,blockquote,pre') || body, mine = $$('.cloze', root), clone = root.cloneNode(true);
+        $$('.cloze', clone).forEach((x, j) => { x.className = j === mine.indexOf(c) ? 'qgap' : 'qother'; });
+        list.push({ type: 'text', page, y: b.y, x: b.x, html: root === body ? clone.innerHTML : clone.outerHTML, answer: c.textContent.trim() });
+      }
+    }
+    for (const c of page.covers || []) list.push({ type: 'cover', page, y: c.y, x: c.x, cover: c });
+    out.push(...list.sort((p, q) => p.y - q.y || p.x - q.x));
+  }
+  return out;
+}
+// Ausschnitt einer (beliebigen) Seite rund um eine Abdeckung – alle Abdeckungen verdeckt, Lücken ebenso.
+function clipEl(page, cov) {
+  const M = 50, rx = Math.max(0, cov.x - M), ry = Math.max(0, cov.y - M), rw = cov.x - rx + cov.w + M, rh = cov.y - ry + cov.h + M;
+  const W = Math.min(680, innerWidth * .92 - 40), k = Math.min(1.6, W / rw);
+  const outer = h('<div class="qclip"><div class="qpage"></div></div>'), inner = outer.firstChild;
+  outer.style.width = Math.round(rw * k) + 'px'; outer.style.height = Math.round(rh * k) + 'px';
+  Object.assign(inner.style, { width: rx + rw + 200 + 'px', height: ry + rh + 200 + 'px', transform: `scale(${k}) translate(${-rx}px, ${-ry}px)` });
+  for (const b of page.blocks) { const el = blockEl(b); $('.bb', el).contentEditable = 'false'; inner.append(el); $$('img[data-att]', el).forEach(showImg); }
+  const svg = document.createElementNS(SVGNS, 'svg'); svg.append(...page.strokes.map(strokeEl)); inner.append(svg);
+  for (const c of page.covers || []) {
+    const el = document.createElement('div'); el.className = 'cover' + (c === cov ? ' qtarget' : '');
+    Object.assign(el.style, { left: c.x + 'px', top: c.y + 'px', width: c.w + 'px', height: c.h + 'px' }); inner.append(el);
+  }
+  return outer;
+}
+function quiz(sec = secOf()) {
+  if (isLocked(sec)) return toast('Dieser Abschnitt ist gesperrt – erst entsperren.');
+  Hist.flush(); const all = quizItems(sec);
+  if (!all.length) return toast('In diesem Abschnitt gibt es noch nichts abzufragen. Markiere Text und tippe auf „Lücke“ – oder ziehe im Reiter „Zeichnen“ mit „Abdecken“ ein Rechteck über Handschrift oder eine Folie.');
+  const box = h('<div class="modal quiz" tabindex="-1"></div>');
+  let list = [], i = 0, wrong = [], keys = null;
+  const pages = new Set(all.map(x => x.page)).size;
+  function start() {
+    box.className = 'modal quiz';
+    box.innerHTML = `<h3>${esc(sec.name)} abfragen</h3><p>${all.length} ${all.length === 1 ? 'Frage' : 'Fragen'} auf ${pages} ${pages === 1 ? 'Seite' : 'Seiten'}</p>
+      <label style="display:flex;gap:8px;align-items:center"><input type="checkbox" data-mix> Reihenfolge mischen</label>
+      <div class="row"><button class="ghost" data-a="close">Abbrechen</button><button class="primary" data-a="go">Los geht's</button></div>`;
+  }
+  function run(items) {
+    list = items.slice(); if (box.querySelector('[data-mix]')?.checked || run.mix) { run.mix = true; for (let j = list.length - 1; j > 0; j--) { const r = Math.floor(Math.random() * (j + 1)); [list[j], list[r]] = [list[r], list[j]]; } }
+    i = 0; wrong = []; ask();
+  }
+  function ask() {
+    if (i >= list.length) return result();
+    const it = list[i]; box.className = 'modal quiz';
+    box.innerHTML = `<div class="qhead"><i>${esc(it.page.title || 'Unbenannte Seite')}</i> · Frage ${i + 1} von ${list.length}</div><div class="qbody"></div>
+      <div class="row"><button class="ghost" data-a="close" style="margin-right:auto">Beenden</button><button class="primary" data-a="show">Aufdecken</button></div>`;
+    const body = $('.qbody', box);
+    if (it.type === 'text') { body.innerHTML = `<div class="bb qtext">${it.html}</div>`; decorate(body); $$('img[data-att]', body).forEach(showImg); }
+    else body.append(clipEl(it.page, it.cover));
+    box.focus();
+  }
+  function reveal() {
+    box.classList.add('revealed'); $('.qtarget', box)?.classList.add('revealed');
+    $('.row', box).innerHTML = '<button class="ghost" data-a="close" style="margin-right:auto">Beenden</button><button class="ghost no" data-a="no">✗ Nicht gewusst</button><button class="primary" data-a="yes">✓ Gewusst</button>';
+  }
+  function result() {
+    const n = list.length, ok = n - wrong.length; box.className = 'modal quiz';
+    box.innerHTML = `<h3>Fertig! ${ok} von ${n} gewusst.</h3>${wrong.length ? '<p>Nicht gewusst (antippen öffnet die Seite):</p><ul class="qres">' + wrong.map((w, j) => `<li data-w="${j}"><i>${esc(w.page.title || 'Unbenannte Seite')}:</i> ${w.type === 'text' ? esc(w.answer) : 'Abdeckung (Handschrift/Folie)'}</li>`).join('') + '</ul>' : '<p>Alles gewusst. 🎉</p>'}
+      <div class="row" style="flex-wrap:wrap">${wrong.length ? '<button class="ghost" data-a="wrong">Nur die falschen wiederholen</button>' : ''}<button class="ghost" data-a="again">Alle nochmal</button><button class="primary" data-a="close">Schließen</button></div>`;
+  }
+  box.addEventListener('click', e => {
+    const li = e.target.closest('[data-w]'); if (li) { const w = wrong[+li.dataset.w]; closeOverlay(); return go(w.page.id); }
+    const b = e.target.closest('[data-a]'); if (!b) return;
+    const a = b.dataset.a;
+    if (a === 'close') closeOverlay();
+    else if (a === 'go') run(all);
+    else if (a === 'show') reveal();
+    else if (a === 'yes' || a === 'no') { if (a === 'no') wrong.push(list[i]); i++; ask(); }
+    else if (a === 'wrong') run(wrong);
+    else if (a === 'again') run(all);
+  });
+  keys = e => { // Leertaste/Enter: aufdecken bzw. gewusst · 1 oder ←: nicht gewusst · 2 oder →: gewusst
+    if (!overlay.contains(box) || e.target.closest?.('input')) return;
+    const show = $('[data-a=show]', box), yes = $('[data-a=yes]', box), no = $('[data-a=no]', box);
+    if ((e.key === ' ' || e.key === 'Enter') && (show || yes)) { e.preventDefault(); (show || yes).click(); }
+    else if ((e.key === '1' || e.key === 'ArrowLeft') && no) { e.preventDefault(); no.click(); }
+    else if ((e.key === '2' || e.key === 'ArrowRight') && yes) { e.preventDefault(); yes.click(); }
+  };
+  addEventListener('keydown', keys);
+  start(); openOverlay(box, () => removeEventListener('keydown', keys)); box.focus();
+}
+
 // ---------- Menüs ----------
 Object.assign(ACT, {
+  quiz: () => quiz(),
   pdf: () => $('#pdfFile').click(),
   attach: () => lockedNow() || $('#anyFile').click(),
   audio: b => lockedNow() || toggleRecording(b),

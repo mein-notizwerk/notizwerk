@@ -166,7 +166,7 @@ const Sync = (() => {
     Hist.reset(); // Seiten wurden ersetzt – der Rückgängig-Verlauf passt nicht mehr
     return true;
   }
-  const contentKey = p => JSON.stringify([p.title || '', p.blocks || [], p.strokes || [], p.paper || '', p.lvl || 0]);
+  const contentKey = p => JSON.stringify([p.title || '', p.blocks || [], p.strokes || [], p.paper || '', p.lvl || 0, p.covers || []]);
   // Drei-Wege-Abgleich der Struktur: Lokale Änderungen (gegenüber dem letzten gemeinsamen Stand) gewinnen pro Feld,
   // neue Notizbücher/Abschnitte beider Seiten bleiben erhalten, Löschungen werden übernommen.
   function mergeStruct(base, local, remote) {

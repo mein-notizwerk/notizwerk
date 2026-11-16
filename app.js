@@ -54,7 +54,7 @@ async function flush() {
 }
 
 // ---------- Datenmodell ----------
-function mkPage(title = '', extra = {}) { const t = Date.now(); return { id: uid(), title, lvl: 0, paper: 'blank', created: t, updated: t, blocks: [], strokes: [], ...extra }; }
+function mkPage(title = '', extra = {}) { const t = Date.now(); return { id: uid(), title, lvl: 0, paper: 'blank', created: t, updated: t, blocks: [], strokes: [], covers: [], ...extra }; }
 function mkSection(name, color) { return { id: uid(), name, color: color || COLORS[0], pages: [mkPage('')] }; }
 function mkNotebook(name, color) { return { id: uid(), name, color: color || COLORS[0], sections: [mkSection('Allgemein', color)] }; }
 function seed() {
@@ -91,7 +91,7 @@ function normalise(s) {
     for (const sec of nb.sections) {
       sec.id = sec.id || uid(); sec.name = sec.name || 'Abschnitt'; sec.color = sec.color || COLORS[0];
       if (!Array.isArray(sec.pages) || !sec.pages.length) sec.pages = [mkPage('')];
-      sec.pages = sec.pages.map(p => Object.assign(mkPage(''), p, { blocks: Array.isArray(p.blocks) ? p.blocks : [], strokes: Array.isArray(p.strokes) ? p.strokes : [] }));
+      sec.pages = sec.pages.map(p => Object.assign(mkPage(''), p, { blocks: Array.isArray(p.blocks) ? p.blocks : [], strokes: Array.isArray(p.strokes) ? p.strokes : [], covers: Array.isArray(p.covers) ? p.covers : [] }));
     }
   }
   return s;
@@ -417,13 +417,13 @@ function renderPage() {
   pageLeaving();
   ensure(); const p = pageOf(); state.ui.page = p.id;
   const locked = isLocked(secOf()); document.body.classList.toggle('locked', locked);
-  $$('.block', canvas).forEach(e => e.remove());
+  $$('.block,.cover', canvas).forEach(e => e.remove());
   if (locked) { titleEl.value = ''; document.title = 'Notizwerk'; ink.replaceChildren(); $('#backlinks').innerHTML = ''; pageShown(); return; }
   p.blocks = p.blocks.filter(b => !htmlEmpty(b.html));
   titleEl.value = p.title; document.title = (p.title || 'Unbenannte Seite') + ' – Notizwerk';
   canvas.dataset.paper = p.paper || 'blank';
   for (const b of p.blocks) canvas.append(blockEl(b));
-  refreshLinks(); renderInk(); fitCanvas(); renderMeta(); renderBacklinks();
+  refreshLinks(); renderInk(); renderCovers(); fitCanvas(); renderMeta(); renderBacklinks();
   canvas.classList.toggle('study', study); scroller.scrollTo(0, 0); pageShown();
 }
 function renderMeta() {
@@ -515,7 +515,7 @@ canvas.addEventListener('pointerdown', e => {
 });
 canvas.addEventListener('click', e => {
   const bx = e.target.closest('.bx'); if (bx) return removeBlock(bx.closest('.block'), true);
-  const cl = e.target.closest('.cloze'); if (cl && study) { cl.classList.toggle('revealed'); return; }
+  const cl = e.target.closest('.cloze,.cover'); if (cl && study) { cl.classList.toggle('revealed'); return; }
   const a = e.target.closest('a');
   if (a?.classList.contains('plink')) { e.preventDefault(); if (findPage(a.dataset.page)) go(a.dataset.page); else toast('Diese Seite gibt es nicht mehr.'); return; }
   if (a?.href) { e.preventDefault(); if (e.metaKey || e.ctrlKey) window.open(a.href, '_blank', 'noopener'); else toast('Link öffnen: Strg/⌘ + Klick'); return; }
@@ -641,6 +641,23 @@ function strokeEl(s) {
   return el;
 }
 function renderInk() { ink.replaceChildren(...pageOf().strokes.map(strokeEl)); }
+// Abdeckungen: Rechtecke über Handschrift oder PDF-Folien, die beim Abfragen verdeckt werden. { id, x, y, w, h }
+function renderCovers() {
+  $$('.cover', canvas).forEach(e => e.remove());
+  for (const c of pageOf().covers || []) {
+    const el = document.createElement('div'); el.className = 'cover'; el.dataset.id = c.id;
+    Object.assign(el.style, { left: +c.x + 'px', top: +c.y + 'px', width: +c.w + 'px', height: +c.h + 'px' }); canvas.append(el);
+  }
+}
+function finishCover([x0, y0], [x1, y1]) {
+  const p = pageOf(), w = Math.abs(x1 - x0), hh = Math.abs(y1 - y0);
+  if (w < 8 && hh < 8) { // angetippt: Abdeckung an dieser Stelle entfernen
+    const hit = [...(p.covers || [])].reverse().find(c => x0 >= c.x && x0 <= c.x + c.w && y0 >= c.y && y0 <= c.y + c.h); if (!hit) return;
+    p.covers = p.covers.filter(c => c !== hit); renderCovers(); touch(p); return;
+  }
+  p.covers = [...(p.covers || []), { id: uid(), x: Math.round(Math.min(x0, x1)), y: Math.round(Math.min(y0, y1)), w: Math.round(w), h: Math.round(hh) }];
+  renderCovers(); touch(p);
+}
 function segDist(px, py, ax, ay, bx, by) {
   const dx = bx - ax, dy = by - ay, l = dx * dx + dy * dy; let t = l ? ((px - ax) * dx + (py - ay) * dy) / l : 0; t = Math.max(0, Math.min(1, t));
   return Math.hypot(px - ax - t * dx, py - ay - t * dy);
@@ -778,10 +795,10 @@ function drawLive() {
 function beginStroke(e) {
   e.preventDefault(); try { ink.setPointerCapture(e.pointerId); } catch { }
   const r = canvas.getBoundingClientRect(), p = ptIn(e, r), pen = state.ui.pen;
-  live = { id: e.pointerId, type: e.pointerType, r, raf: 0, min: e.pointerType === 'pen' ? .6 : 1, kind: mode === 'erase' ? 'erase' : mode === 'lasso' ? 'lasso' : mode in SHAPES ? 'shape' : 'draw' };
+  live = { id: e.pointerId, type: e.pointerType, r, raf: 0, min: e.pointerType === 'pen' ? .6 : 1, kind: mode === 'erase' ? 'erase' : mode === 'lasso' ? 'lasso' : mode === 'cover' ? 'cover' : mode in SHAPES ? 'shape' : 'draw' };
   setSel(null);
   if (live.kind === 'erase') return eraseAt(p);
-  if (live.kind === 'lasso') { live.q = p; strokePath = document.createElementNS(SVGNS, 'path'); strokePath.setAttribute('class', 'lasso'); ink.append(strokePath); return; }
+  if (live.kind === 'lasso' || live.kind === 'cover') { live.q = p; live.o = live.c = p; strokePath = document.createElementNS(SVGNS, 'path'); strokePath.setAttribute('class', 'lasso'); ink.append(strokePath); return; }
   stroke = mode === 'marker' ? { c: pen.color === 'auto' ? '#f5c400' : pen.color, w: pen.width * 6, o: .35, p } : { c: pen.color, w: pen.width, p };
   if (live.kind === 'shape') { live.o = p.slice(); if (mode !== 'ellipse') stroke.k = 'poly'; }
   else { live.d = `M${p[0]} ${p[1]}`; if (mode === 'pen' && e.pointerType === 'pen' && e.pressure > 0) stroke.pr = [r2(e.pressure)]; }
@@ -830,6 +847,7 @@ ink.addEventListener('pointermove', e => {
   if (!live || e.pointerId !== live.id) return;
   if (live.type === 'pen') penAt = Date.now();
   if (live.kind === 'erase') { for (const ev of events(e)) eraseAt(ptIn(ev, live.r)); return; }
+  if (live.kind === 'cover') { const [x, y] = ptIn(e, live.r), [a, b] = live.o; live.c = [x, y]; strokePath.setAttribute('d', `M${a} ${b}H${x}V${y}H${a}Z`); return; }
   if (live.kind === 'shape') { const [x, y] = ptIn(e, live.r); stroke.p = shapePts(mode, live.o[0], live.o[1], x, y, stroke.w); }
   else {
     const q = live.kind === 'lasso' ? live.q : stroke.p;
@@ -854,10 +872,11 @@ const endStroke = e => {
   if (pan && e.pointerId === pan.id) return endPan(e);
   if (!live || e.pointerId !== live.id) return;
   if (live.type === 'pen') penAt = Date.now();
-  const { kind, q } = live; cancelAnimationFrame(live.raf); live = null;
+  const { kind, q, o, c } = live; cancelAnimationFrame(live.raf); live = null;
   if (kind === 'erase') return;
   let s = stroke; const el = strokePath; stroke = strokePath = null;
   if (kind === 'lasso') { el.remove(); return finishLasso(q); }
+  if (kind === 'cover') { el.remove(); return finishCover(o, c); }
   if (!s) return;
   let mx = 0, my = 0, nx = 1e9, ny = 1e9; for (let i = 0; i < s.p.length; i += 2) { mx = Math.max(mx, s.p[i]); my = Math.max(my, s.p[i + 1]); nx = Math.min(nx, s.p[i]); ny = Math.min(ny, s.p[i + 1]); }
   if (kind === 'shape' && mx - nx < 3 && my - ny < 3) return el.remove(); // nur angetippt
@@ -887,6 +906,7 @@ function renderDrawTools() {
   if (mode === 'erase') {
     for (const [k, label] of [['stroke', 'Ganzer Strich'], ['part', 'Nur ein Stück']]) { const b = h(`<button class="${(pen.erase || 'stroke') === k ? 'on' : ''}">${label}</button>`); b.onclick = () => { pen.erase = k; renderDrawTools(); save(); }; box.append(b); }
   } else if (mode === 'lasso') box.append(h('<span class="hint">Striche einkreisen oder antippen</span>'));
+  else if (mode === 'cover') box.append(h('<span class="hint">Rechteck über Handschrift oder Folie ziehen · antippen löscht · verdeckt beim Abfragen</span>'));
   else {
     for (const c of INK) { const b = h(`<button class="sw${pen.color === c ? ' on' : ''}" title="Farbe"></button>`); b.style.background = c === 'auto' ? 'var(--fg)' : c; b.onclick = () => { pen.color = c; renderDrawTools(); save(); }; box.append(b); }
     box.append(h('<span class="sep"></span>'));
