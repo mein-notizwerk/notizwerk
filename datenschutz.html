@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Notizwerk – Datenschutz</title>
+<style>body{font:16px/1.6 system-ui,-apple-system,sans-serif;max-width:720px;margin:40px auto;padding:0 16px;color:#1f2328;background:#fffefb}h1{font-weight:500}h2{font-size:1.1em;margin-top:1.6em}a{color:#3b5bdb}</style>
+</head>
+<body>
+<h1>Notizwerk – Datenschutz</h1>
+<p>Notizwerk ist eine private Notiz-App für den eigenen Gebrauch. Es gibt keine Werbung, keine Analyse-Werkzeuge und keine Weitergabe von Daten an Dritte.</p>
+<h2>Welche Daten gespeichert werden</h2>
+<ul>
+<li><b>Auf dem Gerät:</b> Notizen, Zeichnungen und Anhänge liegen im Speicher des Browsers.</li>
+<li><b>Synchronisation (Supabase):</b> Wer sich anmeldet, dessen Notizen werden in einer Datenbank bei Supabase (Rechenzentrum Frankfurt) gespeichert. Jedes Konto sieht nur die eigenen Daten.</li>
+<li><b>Google Drive (freiwillig):</b> Wird Google Drive verbunden, legt Notizwerk Dateien, Fotos, PDFs und Tonaufnahmen in einem Ordner „Notizwerk“ im eigenen Drive ab. Notizwerk nutzt dafür nur die Berechtigung <code>drive.file</code> und kann damit ausschließlich Dateien sehen und ändern, die es selbst angelegt hat. Das dafür nötige Zugriffstoken wird geschützt bei Supabase gespeichert und nur verwendet, um diese Dateien zu speichern und zu laden.</li>
+</ul>
+<h2>Google-Nutzerdaten</h2>
+<p>Daten aus Google Drive werden ausschließlich innerhalb der App angezeigt. Sie werden nicht an Dritte übermittelt, nicht für Werbung genutzt und nicht von Menschen gelesen. Die Verwendung entspricht der <a href="https://developers.google.com/terms/api-services-user-data-policy">Richtlinie zu Nutzerdaten für Google API-Dienste</a> einschließlich der Anforderungen zur eingeschränkten Nutzung.</p>
+<h2>Verbindung trennen und löschen</h2>
+<p>Die Verbindung zu Google Drive lässt sich jederzeit in der App trennen (☁ Sync → Trennen) oder unter <a href="https://myaccount.google.com/permissions">myaccount.google.com/permissions</a> entziehen. Das gespeicherte Token wird dabei gelöscht. Die Dateien im Drive bleiben dem Inhaber erhalten.</p>
+<p><a href="./">Zurück zu Notizwerk</a></p>
+</body>
+</html>
