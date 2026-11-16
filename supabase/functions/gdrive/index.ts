@@ -22,7 +22,8 @@ Deno.serve(async (req) => {
     const { data: { user } } = await admin.auth.getUser(jwt);
     if (!user) return json({ message: 'nicht angemeldet' }, 401);
 
-    const id = Deno.env.get('GOOGLE_CLIENT_ID'), secret = Deno.env.get('GOOGLE_CLIENT_SECRET');
+    // trim(): beim Einfügen ins Dashboard rutschen leicht Leerzeichen oder Zeilenumbrüche mit
+    const id = Deno.env.get('GOOGLE_CLIENT_ID')?.trim(), secret = Deno.env.get('GOOGLE_CLIENT_SECRET')?.trim();
     if (!id || !secret) return json({ message: 'Google ist in Supabase noch nicht eingerichtet (Secrets fehlen).' }, 500);
     const google = async (params: Record<string, string>) => {
       const r = await fetch('https://oauth2.googleapis.com/token', {
@@ -36,7 +37,7 @@ Deno.serve(async (req) => {
 
     if (body.action === 'connect') {
       const { ok, j } = await google({ grant_type: 'authorization_code', code: String(body.code || ''), redirect_uri: String(body.redirect_uri || '') });
-      if (!ok) return json({ message: 'Google hat die Verbindung abgelehnt: ' + (j.error_description || j.error || '') }, 400);
+      if (!ok) return json({ message: 'Google hat die Verbindung abgelehnt: ' + [j.error, j.error_description].filter(Boolean).join(' – ') }, 400);
       if (!j.refresh_token) return json({ message: 'Google hat kein Dauer-Token geliefert. Bitte noch einmal verbinden.' }, 400);
       const { error } = await admin.from('nw_google').upsert({ user_id: user.id, refresh: j.refresh_token, updated_at: new Date().toISOString() });
       if (error) return json({ message: error.message }, 500);

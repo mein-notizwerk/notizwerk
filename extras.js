@@ -177,7 +177,8 @@ async function ocrPage() {
 // die Edge-Function "gdrive" tauscht es gegen kurzlebige Zugriffstoken. Die App sieht nur Dateien, die sie selbst angelegt hat.
 const Drive = (() => {
   const cfg = () => window.NOTIZWERK_GOOGLE || {}, api = () => localStorage.getItem('nw:gapi') || 'https://www.googleapis.com';
-  const here = () => location.origin + location.pathname;
+  // immer dieselbe Rücksprung-Adresse – auch wenn die App über …/index.html (Dock, Home-Bildschirm) geöffnet wurde
+  const here = () => location.origin + location.pathname.replace(/index\.html$/, '');
   let tok = null, folderId = null;
   const on = () => localStorage.getItem('nw:gdrive') === '1';
   const setOn = v => { v ? localStorage.setItem('nw:gdrive', '1') : localStorage.removeItem('nw:gdrive'); if (!v) { tok = null; folderId = null; } };
@@ -235,7 +236,7 @@ const Drive = (() => {
   }
   async function start() {
     const q = new URLSearchParams(location.search);
-    if (q.get('code') || q.get('error')) { history.replaceState(null, '', location.pathname); if (q.get('code')) return finish(q.get('code'), q.get('state')); toast('Die Verbindung mit Google Drive wurde abgebrochen.'); }
+    if (q.get('code') || q.get('error')) { history.replaceState(null, '', location.pathname); if (q.get('code')) return finish(q.get('code'), q.get('state')); toast('Die Verbindung mit Google Drive wurde abgebrochen' + (q.get('error') === 'access_denied' ? '.' : ': ' + q.get('error'))); }
     if (cfg().clientId && Sync.loggedIn) token().catch(() => { }); // ist das Konto (vielleicht auf einem anderen Gerät) schon verbunden?
   }
   function panel(el) {
