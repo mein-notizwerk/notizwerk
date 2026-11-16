@@ -590,7 +590,7 @@ async function fileToDataURL(file) {
 async function insertImage(file, pos) {
   if (!/^image\/(png|jpe?g|gif|webp)$/.test(file.type)) return toast('Dieses Bildformat wird nicht unterstützt.');
   const bb = !pos && activeBB(), range = bb && getSelection().getRangeAt(0).cloneRange();
-  let url, tag; try { url = await fileToDataURL(file); tag = await imgHtml(url); } catch { return toast('Bild konnte nicht gelesen werden.'); }
+  let url, tag; try { url = await fileToDataURL(file); tag = await imgHtml(url, file); } catch { return toast('Bild konnte nicht gelesen werden.'); }
   if (bb && bb.isConnected) { bb.focus(); const s = getSelection(); s.removeAllRanges(); s.addRange(range); exec('insertHTML', tag); decorate(bb); syncBlock(bb); return; }
   const [x, y] = pos || viewPos();
   const el = newBlock(x, y, `<div>${tag}</div><div><br></div>`, 420);

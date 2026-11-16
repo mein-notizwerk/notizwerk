@@ -292,10 +292,13 @@ canvas.addEventListener('click', async e => { // fehlendes Bild antippen = noch 
   if (!await showImg(i)) toast(navigator.onLine ? 'Dieses Bild liegt noch nicht in der Ablage – es wird vom anderen Gerät noch hochgeladen.' : 'Ohne Internet kann das Bild nicht geladen werden.');
 });
 // Neues Foto: mit Google Drive wird es ausgelagert, sonst steht es wie bisher direkt in der Notiz.
-async function imgHtml(dataUrl) {
+// Mit Drive wird das Original in voller Qualität abgelegt (orig = die eingefügte Datei), ohne Drive die verkleinerte Fassung in der Notiz.
+async function imgHtml(dataUrl, orig) {
   if (!Drive.on()) return `<img src="${dataUrl}">`;
-  const blob = await (await fetch(dataUrl)).blob(), im = new Image(); im.src = dataUrl; await im.decode();
-  const id = uid(); await DB.set('att:' + id, { name: 'Bild ' + fmtDate(Date.now()).replace(/[.:]/g, '-') + '.' + (blob.type.split('/')[1] || 'jpg'), type: blob.type, size: blob.size, blob });
+  const keep = orig && /^image\/(png|jpe?g|gif|webp)$/.test(orig.type);
+  const blob = keep ? orig : await (await fetch(dataUrl)).blob(), im = new Image(); im.src = dataUrl; await im.decode();
+  const name = keep && orig.name ? orig.name : 'Bild ' + fmtDate(Date.now()).replace(/[.:]/g, '-') + '.' + (blob.type.split('/')[1] || 'jpg');
+  const id = uid(); await DB.set('att:' + id, { name, type: blob.type, size: blob.size, blob });
   Files.queue(id, blob.size);
   return `<img data-att="${id}" data-ar="${r2(im.width / im.height)}">`;
 }
@@ -343,12 +346,15 @@ async function addFiles(files, put = placer()) {
     if (f.size > 300e6) { toast(`„${f.name}“ ist zu groß (höchstens 300 MB).`); continue; }
     const head = `„${f.name}“ (${fmtSize(f.size)}) einfügen`, local = f.size > Files.MAX && !Drive.on() ? ' Über 50 MB: bleibt ohne Google Drive nur auf diesem Gerät.' : '';
     let how = 'att';
+    const drive = Drive.on(), where = drive ? ' Gespeichert wird die Datei in deinem Google Drive (Ordner „Notizwerk“).' : ' Gespeichert wird die Datei im Notizwerk-Speicher (Supabase).';
     if (f.type === 'application/pdf' || /\.pdf$/i.test(f.name)) how = await pick(head, [
-      { k: 'print', label: 'Als Ausdruck', text: 'Jede Seite ist auf der Notizseite zu sehen. Du kannst darauf schreiben, der Text ist durchsuchbar. Gespeichert wird nur das PDF selbst, einmal.' + local },
-      { k: 'att', label: 'Nur als Link', text: 'In der Notiz steht ein kleiner Eintrag, das PDF öffnet sich beim Antippen. Die Notiz bleibt klein und schnell.' + local }]);
+      { k: 'print', label: 'Als Ausdruck', text: 'Jede Seite ist auf der Notizseite zu sehen. Du kannst darauf schreiben, der Text ist durchsuchbar.' + where + local },
+      { k: 'att', label: 'Nur als Link', text: 'In der Notiz steht ein kleiner Eintrag, das PDF öffnet sich beim Antippen.' + where + local }]);
     else if (/^image\/(png|jpe?g|gif|webp)$/.test(f.type)) how = await pick(head, [
-      { k: 'img', label: 'Als Bild anzeigen', text: 'Das Foto ist direkt in der Notiz sichtbar. Es wird dafür verkleinert, meist auf 0,1–0,5 MB.' },
-      { k: 'att', label: 'Nur als Link', text: 'In der Notiz steht ein kleiner Eintrag, das Foto bleibt in Originalgröße erhalten und öffnet sich beim Antippen.' + local }]);
+      { k: 'img', label: 'Als Bild anzeigen', text: drive
+        ? 'Das Bild ist wie ein Ausdruck auf der Seite zu sehen, du kannst darauf schreiben. Das Original wird in voller Qualität in deinem Google Drive (Ordner „Notizwerk“) gespeichert.'
+        : 'Das Bild ist wie ein Ausdruck auf der Seite zu sehen, du kannst darauf schreiben. Es wird dafür verkleinert (meist 0,1–0,5 MB) und mit der Notiz gespeichert.' },
+      { k: 'att', label: 'Nur als Link', text: 'In der Notiz steht nur ein kleiner Eintrag, das Bild öffnet sich beim Antippen in Originalgröße.' + where + local }]);
     if (!how) continue;
     if (how === 'print') { await insertPdf(f); continue; }
     if (how === 'img') { await insertImage(f); continue; }
