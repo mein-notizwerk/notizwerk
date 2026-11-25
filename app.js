@@ -235,6 +235,7 @@ const MORE = '<button class="more" title="Optionen: umbenennen, verschieben, lö
 function renderNav() {
   ensure();
   const nb = nbOf(), sec = secOf(), page = pageOf();
+  $('#nbLabel').textContent = nb.name; $('#nbLabel').parentElement.title = `In allen Notizen suchen (⌘K) · ${nb.name}`;
   $('#nbBtn').innerHTML = `<span class="dot" style="background:${esc(nb.color)}"></span><b>${esc(nb.name)}</b><span>▾</span>`;
   $('#sections').innerHTML = nb.sections.map(s => `<div class="sec lvl${s.lvl || 0}${s.id === sec.id ? ' on' : ''}" draggable="true" data-id="${s.id}" style="--c:${esc(s.color)}" title="${esc(s.name)}">${s.lock ? (isLocked(s) ? '🔒 ' : '🔓 ') : ''}${esc(s.name)}${MORE}</div>`).join('');
   $('#pages').innerHTML = isLocked(sec) ? '<div class="pglock">🔒 Gesperrt</div>' : sec.pages.map(p => {
@@ -944,6 +945,8 @@ function withSelection(fn) {
 }
 const ACT = {
   nav: () => document.body.classList.toggle('nonav'),
+  focus: () => document.body.classList.toggle('nonav'),
+  share: () => sharePage(),
   mode: b => setMode(b.dataset.mode),
   tab: b => {
     const t = b.dataset.tab;

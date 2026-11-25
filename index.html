@@ -16,24 +16,32 @@
 <body>
 <div id="app">
   <header id="toolbar">
-    <div id="appbar">
-      <button data-act="nav" title="Navigation ein-/ausblenden">☰</button>
-      <span class="brand">Notizwerk</span>
-      <button id="searchBox" data-act="search" title="Alle Notizen durchsuchen">Suchen <kbd>⌘K</kbd></button>
-      <button data-act="undo" title="Rückgängig (Strg/⌘+Z)">↶</button>
-      <button data-act="redo" title="Wiederholen (Strg/⌘+Umschalt+Z)">↷</button>
-      <span id="saveState"></span>
-      <button id="syncBtn" data-act="sync" title="Synchronisation">☁ Sync</button>
-      <button data-act="theme" title="Hell/Dunkel">◐</button>
-    </div>
-    <div id="tabs">
-      <button data-act="file" class="file">Datei</button>
-      <button data-act="tab" data-tab="start" class="on">Start</button>
-      <button data-act="tab" data-tab="insert">Einfügen</button>
-      <button data-act="tab" data-tab="draw">Zeichnen</button>
-      <button data-act="tab" data-tab="view">Ansicht</button>
+    <div id="topbar">
+      <div class="pill" id="leftpill">
+        <button data-act="nav" class="ic" title="Navigation ein-/ausblenden">☰</button>
+        <button id="searchBox" data-act="search" title="Alle Notizen durchsuchen (⌘K)"><svg class="ico" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5 21 21"/></svg><span id="nbLabel">Notizwerk</span></button>
+      </div>
+      <div class="pill" id="tabs">
+        <button data-act="file" class="file">Datei</button>
+        <button data-act="tab" data-tab="start" class="on">Start</button>
+        <button data-act="tab" data-tab="insert">Einfügen</button>
+        <button data-act="tab" data-tab="draw">Zeichnen</button>
+        <button data-act="tab" data-tab="view">Ansicht</button>
+      </div>
+      <div class="pill" id="rightpill">
+        <span id="saveState"></span>
+        <button id="syncBtn" data-act="sync" title="Synchronisation und Einstellungen">☁ Sync</button>
+        <button data-act="share" class="ic" title="Seite teilen"><svg class="ico" viewBox="0 0 24 24"><path d="M12 15V3M7.5 7.5 12 3l4.5 4.5"/><path d="M5 11v8.5A1.5 1.5 0 0 0 6.5 21h11a1.5 1.5 0 0 0 1.5-1.5V11"/></svg></button>
+        <button data-act="theme" class="ic" title="Hell/Dunkel"><svg class="ico" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 3.5v17a8.5 8.5 0 0 0 0-17Z" style="fill:currentColor"/></svg></button>
+        <button data-act="focus" class="ic" title="Navigation ausblenden (Vollansicht)"><svg class="ico" viewBox="0 0 24 24"><path d="M14 4h6v6M20 4l-7 7M10 20H4v-6M4 20l7-7"/></svg></button>
+      </div>
     </div>
     <div id="ribbon">
+      <div class="rbfix">
+        <button data-act="undo" class="ic" title="Rückgängig (Strg/⌘+Z)"><svg class="ico" viewBox="0 0 24 24"><path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/></svg></button>
+        <button data-act="redo" class="ic" title="Wiederholen (Strg/⌘+Umschalt+Z)"><svg class="ico" viewBox="0 0 24 24"><path d="m15 14 5-5-5-5"/><path d="M20 9H9.5a5.5 5.5 0 0 0 0 11H13"/></svg></button>
+        <span class="sep"></span>
+      </div>
       <div class="rb" data-rb="start">
         <button data-act="para" title="Absatzformat">Absatz ▾</button>
         <span class="sep"></span>
