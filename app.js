@@ -896,25 +896,63 @@ canvas.addEventListener('pointerdown', e => {
   if (fingerPref === null) setFinger('scroll');
   penAt = Date.now(); beginStroke(e);
 });
+// Zeichen-Werkzeugleiste: Werkzeuge als Symbole, darunter eine „Stiftablage“ mit frei einstellbaren Stiften und Textmarkern.
+const DEFAULT_PENS = [
+  { k: 'pen', c: 'auto', w: 2.5 }, { k: 'pen', c: '#3b5bdb', w: 2.5 }, { k: 'pen', c: '#e5484d', w: 2.5 }, { k: 'pen', c: '#2b9a66', w: 2.5 },
+  { k: 'marker', c: '#f5c400', w: 2.5 }, { k: 'marker', c: '#22c3e6', w: 2.5 }, { k: 'marker', c: '#3ddc5a', w: 2.5 }, { k: 'marker', c: '#f29ad8', w: 2.5 }
+];
+const PEN_COLORS = ['auto', '#3b5bdb', '#0c8599', '#2b9a66', '#e8890c', '#e5484d', '#c2298a', '#8e4ec6', '#6b7280'];
+const MARK_COLORS = ['#f5c400', '#ff9f43', '#22c3e6', '#3ddc5a', '#9be36b', '#f29ad8', '#c9a7ff'];
+const pens = () => { if (!Array.isArray(state.ui.pens) || !state.ui.pens.length) state.ui.pens = DEFAULT_PENS.map(p => ({ ...p })); return state.ui.pens; };
+function usePen(i) { const p = pens()[i] || pens()[0]; state.ui.penIdx = pens().indexOf(p); state.ui.pen.color = p.c; state.ui.pen.width = p.w; return p.k; }
+const ICONS = {
+  text: '<path d="M6 5h12M12 5v14M9.5 19h5"/>',
+  lasso: '<ellipse cx="12" cy="10" rx="8" ry="5.5" stroke-dasharray="2.6 2.4"/><path d="M8.5 15c-1 1.6-.6 3.3.9 4.2 1.2.7 2.6.4 3.1-.8"/>',
+  cover: '<rect x="3.5" y="6" width="17" height="12" rx="2" stroke-dasharray="2.6 2.2"/><rect x="7" y="9.5" width="10" height="5" rx="1" style="fill:currentColor;stroke:none;opacity:.5"/>',
+  shapes: '<rect x="3.5" y="9.5" width="10" height="10" rx="1.5"/><circle cx="15.5" cy="8.5" r="5"/>',
+  finger: '<path d="M9 12V5a1.6 1.6 0 0 1 3.2 0v6"/><path d="M12.2 10.5a1.6 1.6 0 0 1 3.2 0V12"/><path d="M15.4 11.5a1.6 1.6 0 0 1 3.2 0V15a6 6 0 0 1-6 6h-.8a6 6 0 0 1-4.9-2.6l-2.4-3.5a1.6 1.6 0 0 1 2.6-1.8L9 15"/>',
+  plus: '<path d="M12 5v14M5 12h14"/>'
+};
+const ico = (k, cls = '') => `<svg class="ico ${cls}" viewBox="0 0 24 24">${ICONS[k]}</svg>`;
+function penSvg(p) { // senkrechter Stift bzw. Textmarker, Spitze nach oben
+  const c = p.c === 'auto' ? 'var(--fg)' : p.c;
+  return p.k === 'marker'
+    ? `<svg class="pensvg" viewBox="0 0 28 64"><path d="M8 17V8l12-5v14Z" fill="${c}"/><rect x="5" y="16" width="18" height="48" rx="3" fill="${c}" opacity=".45"/><rect x="5" y="16" width="18" height="48" rx="3" fill="none" stroke="rgba(0,0,0,.18)"/><rect x="5" y="16" width="18" height="6" fill="${c}"/></svg>`
+    : `<svg class="pensvg" viewBox="0 0 28 64"><path d="M7.5 18 14 2l6.5 16Z" fill="var(--paper)" stroke="rgba(0,0,0,.18)"/><path d="M11.6 8 14 2l2.4 6Z" fill="${c}"/><rect x="6" y="17" width="16" height="47" rx="3" fill="var(--paper)" stroke="rgba(0,0,0,.18)"/><rect x="6" y="17" width="16" height="${Math.round(4 + p.w * 1.6)}" fill="${c}"/></svg>`;
+}
+const ERASER = '<svg class="pensvg" viewBox="0 0 28 64"><rect x="5" y="6" width="18" height="58" rx="4" fill="var(--paper)" stroke="rgba(0,0,0,.18)"/><path d="M5 18V10a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4v8Z" fill="#f2899b"/></svg>';
+function penMenu(anchor, i) {
+  const p = pens()[i], W = p.k === 'marker' ? [['Schmal', 1.5], ['Mittel', 2.5], ['Breit', 4]] : [['Sehr fein', 1], ['Fein', 1.5], ['Mittel', 2.5], ['Dick', 4.5], ['Sehr dick', 7]];
+  const upd = ch => { Object.assign(p, ch); usePen(i); renderDrawTools(); save(); };
+  menu(anchor, [
+    { head: p.k === 'marker' ? 'Textmarker' : 'Stift' },
+    { swatches: p.k === 'marker' ? MARK_COLORS : PEN_COLORS, fn: c => upd({ c }) },
+    ...W.map(([label, w]) => ({ label, checked: p.w === w, fn: () => upd({ w }) })),
+    '-',
+    { label: p.k === 'marker' ? 'Zum Stift machen' : 'Zum Textmarker machen', fn: () => { upd({ k: p.k === 'marker' ? 'pen' : 'marker', c: p.k === 'marker' ? 'auto' : MARK_COLORS[0], w: 2.5 }); setMode(p.k); } },
+    pens().length > 1 && { label: 'Aus der Ablage entfernen', danger: true, fn: () => { pens().splice(i, 1); usePen(Math.min(i, pens().length - 1)); setMode(pens()[state.ui.penIdx].k); save(); } }
+  ]);
+}
 function setMode(m) {
+  if (m === 'pen' || m === 'marker') { let i = state.ui.penIdx ?? 0; if (pens()[i]?.k !== m) i = Math.max(0, pens().findIndex(p => p.k === m)); m = usePen(i); }
   mode = m; canvas.classList.toggle('drawing', m !== 'text'); setSel(null);
-  $$('#modes button').forEach(b => b.classList.toggle('on', b.dataset.mode === m || (b.dataset.act === 'shapes' && m in SHAPES)));
-  $('#drawtools').hidden = m === 'text'; renderDrawTools();
+  renderDrawTools();
   if (m !== 'text') { getSelection().removeAllRanges(); document.activeElement?.blur?.(); }
 }
 function renderDrawTools() {
-  const pen = state.ui.pen, box = $('#drawtools'); box.innerHTML = '';
-  if (mode === 'erase') {
-    for (const [k, label] of [['stroke', 'Ganzer Strich'], ['part', 'Nur ein Stück']]) { const b = h(`<button class="${(pen.erase || 'stroke') === k ? 'on' : ''}">${label}</button>`); b.onclick = () => { pen.erase = k; renderDrawTools(); save(); }; box.append(b); }
-  } else if (mode === 'lasso') box.append(h('<span class="hint">Striche einkreisen oder antippen</span>'));
-  else if (mode === 'cover') box.append(h('<span class="hint">Rechteck über Handschrift oder Folie ziehen · antippen löscht · verdeckt beim Abfragen</span>'));
-  else {
-    for (const c of INK) { const b = h(`<button class="sw${pen.color === c ? ' on' : ''}" title="Farbe"></button>`); b.style.background = c === 'auto' ? 'var(--fg)' : c; b.onclick = () => { pen.color = c; renderDrawTools(); save(); }; box.append(b); }
-    box.append(h('<span class="sep"></span>'));
-    for (const w of [1.5, 2.5, 4.5]) { const b = h(`<button class="wbtn${pen.width === w ? ' on' : ''}" title="Strichstärke"><i style="width:${w * 2.4}px;height:${w * 2.4}px"></i></button>`); b.onclick = () => { pen.width = w; renderDrawTools(); save(); }; box.append(b); }
-  }
-  box.append(h('<span class="sep"></span>'));
-  const f = h(`<button title="Mit dem Finger zeichnen oder die Seite verschieben">${fingerDraws() ? 'Finger zeichnet' : 'Finger scrollt'}</button>`); f.onclick = () => setFinger(fingerDraws() ? 'scroll' : 'draw'); box.append(f);
+  const box = $('#drawbar'); if (!box) return;
+  const tool = (m, k, title) => `<button class="tool${mode === m ? ' on' : ''}" data-act="mode" data-mode="${m}" title="${title}">${ico(k)}</button>`;
+  const drawing = mode === 'pen' || mode === 'marker';
+  const hint = { lasso: 'Striche einkreisen oder antippen', cover: 'Rechteck ziehen · antippen löscht · verdeckt beim Abfragen', erase: (state.ui.pen.erase === 'part' ? 'Radiert nur ein Stück' : 'Radiert ganze Striche') + ' · nochmal tippen für Optionen' }[mode] || (drawing ? 'Gewählten Stift nochmal tippen: Farbe und Stärke' : '');
+  box.innerHTML = tool('text', 'text', 'Tippen und Auswählen (Esc)') + tool('lasso', 'lasso', 'Lasso: Gezeichnetes auswählen, verschieben, vergrößern')
+    + tool('cover', 'cover', 'Abdecken: Rechteck über Handschrift oder Folie – wird beim Abfragen verdeckt')
+    + '<span class="sep"></span><div class="rack">'
+    + `<button class="penbtn eraser${mode === 'erase' ? ' on' : ''}" data-act="mode" data-mode="erase" title="Radierer (nochmal tippen: ganzer Strich oder nur ein Stück)">${ERASER}</button>`
+    + pens().map((p, i) => `<button class="penbtn${drawing && state.ui.penIdx === i ? ' on' : ''}" data-act="pen" data-i="${i}" title="${p.k === 'marker' ? 'Textmarker' : 'Stift'} (nochmal tippen: Farbe und Stärke)">${penSvg(p)}</button>`).join('')
+    + `</div><button class="tool" data-act="addpen" title="Stift hinzufügen">${ico('plus')}</button>`
+    + `<span class="sep"></span><button class="tool wide${mode in SHAPES ? ' on' : ''}" data-act="shapes" title="Formen: Linie, Pfeil, Rechteck, Ellipse">${ico('shapes')}<small>▾</small></button>`
+    + `<button class="tool${fingerDraws() ? ' on' : ''}" data-act="finger" title="${fingerDraws() ? 'Finger zeichnet – tippen, damit der Finger die Seite verschiebt' : 'Finger verschiebt die Seite – tippen, damit der Finger zeichnet'}">${ico('finger')}</button>`
+    + (hint ? `<span class="hint">${hint}</span>` : '');
 }
 
 // ---------- Formatierung ----------
@@ -947,7 +985,10 @@ const ACT = {
   nav: () => document.body.classList.toggle('nonav'),
   focus: () => document.body.classList.toggle('nonav'),
   share: () => sharePage(),
-  mode: b => setMode(b.dataset.mode),
+  mode: b => { if (b.dataset.mode === 'erase' && mode === 'erase') return menu(b, [{ head: 'Radierer' }, ...[['stroke', 'Ganzen Strich löschen'], ['part', 'Nur ein Stück wegradieren']].map(([k, label]) => ({ label, checked: (state.ui.pen.erase || 'stroke') === k, fn: () => { state.ui.pen.erase = k; renderDrawTools(); save(); } }))]); setMode(b.dataset.mode); },
+  pen: b => { const i = +b.dataset.i; if ((mode === 'pen' || mode === 'marker') && state.ui.penIdx === i) return penMenu(b, i); state.ui.penIdx = i; setMode(pens()[i].k); save(); },
+  addpen: () => { if (pens().length >= 12) return toast('Die Ablage ist voll (12 Stifte).'); pens().push({ k: 'pen', c: '#8e4ec6', w: 2.5 }); state.ui.penIdx = pens().length - 1; setMode('pen'); save(); setTimeout(() => { const el = $(`#drawbar .penbtn[data-i="${state.ui.penIdx}"]`); if (el) penMenu(el, state.ui.penIdx); }, 0); },
+  finger: () => setFinger(fingerDraws() ? 'scroll' : 'draw'),
   tab: b => {
     const t = b.dataset.tab;
     $$('#tabs [data-tab]').forEach(x => x.classList.toggle('on', x === b)); $$('.rb').forEach(r => r.hidden = r.dataset.rb !== t);
